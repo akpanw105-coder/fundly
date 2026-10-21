@@ -6,110 +6,135 @@ import {
   TabTriggerSlotProps,
   TabListProps,
 } from 'expo-router/ui';
-import { SymbolView } from 'expo-symbols';
-import { Pressable, useColorScheme, View, StyleSheet } from 'react-native';
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { ExternalLink } from './external-link';
-import { ThemedText } from './themed-text';
-import { ThemedView } from './themed-view';
-
-import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
+import { FundlyColors, FundlyTypography } from '@/constants/theme';
 
 export default function AppTabs() {
   return (
     <Tabs>
-      <TabSlot style={{ height: '100%' }} />
+      <TabSlot style={styles.slot} />
       <TabList asChild>
-        <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
-            <TabButton>Home</TabButton>
+        <FundlyBottomDock>
+          <TabTrigger name="index" href="/" asChild>
+            <TabButton icon="🏠">Home</TabButton>
           </TabTrigger>
-          <TabTrigger name="explore" href="/explore" asChild>
-            <TabButton>Explore</TabButton>
+          <TabTrigger name="history" href="/history" asChild>
+            <TabButton icon="📜">History</TabButton>
           </TabTrigger>
-        </CustomTabList>
+          <TabTrigger name="analytics" href="/analytics" asChild>
+            <TabButton icon="📊">Analytics</TabButton>
+          </TabTrigger>
+          <TabTrigger name="budgets" href="/budgets" asChild>
+            <TabButton icon="🥧">Budgets</TabButton>
+          </TabTrigger>
+          <TabTrigger name="goals" href="/goals" asChild>
+            <TabButton icon="🎯">Goals</TabButton>
+          </TabTrigger>
+        </FundlyBottomDock>
       </TabList>
     </Tabs>
   );
 }
 
-export function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
+interface TabButtonProps extends TabTriggerSlotProps {
+  icon: string;
+}
+
+export function TabButton({ children, isFocused, icon, ...props }: TabButtonProps) {
   return (
-    <Pressable {...props} style={({ pressed }) => pressed && styles.pressed}>
-      <ThemedView
-        type={isFocused ? 'backgroundSelected' : 'backgroundElement'}
-        style={styles.tabButtonView}>
-        <ThemedText type="small" themeColor={isFocused ? 'text' : 'textSecondary'}>
-          {children}
-        </ThemedText>
-      </ThemedView>
+    <Pressable
+      {...props}
+      style={({ pressed }) => [
+        styles.tabBtn,
+        isFocused ? styles.tabBtnActive : styles.tabBtnInactive,
+        pressed && styles.pressed,
+      ]}>
+      <Text style={styles.tabIcon}>{icon}</Text>
+      <Text
+        style={[
+          styles.tabLabel,
+          isFocused ? styles.tabLabelActive : styles.tabLabelInactive,
+        ]}>
+        {children}
+      </Text>
     </Pressable>
   );
 }
 
-export function CustomTabList(props: TabListProps) {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
-
+export function FundlyBottomDock(props: TabListProps) {
   return (
-    <View {...props} style={styles.tabListContainer}>
-      <ThemedView type="backgroundElement" style={styles.innerContainer}>
-        <ThemedText type="smallBold" style={styles.brandText}>
-          Expo Starter
-        </ThemedText>
-
+    <View {...props} style={styles.dockContainer}>
+      <View style={styles.dockSurface}>
         {props.children}
-
-        <ExternalLink href="https://docs.expo.dev" asChild>
-          <Pressable style={styles.externalPressable}>
-            <ThemedText type="link">Docs</ThemedText>
-            <SymbolView
-              tintColor={colors.text}
-              name={{ ios: 'arrow.up.right.square', web: 'link' }}
-              size={12}
-            />
-          </Pressable>
-        </ExternalLink>
-      </ThemedView>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  tabListContainer: {
+  slot: {
+    height: '100%',
+    backgroundColor: FundlyColors.background,
+  },
+  dockContainer: {
     position: 'absolute',
-    width: '100%',
-    padding: Spacing.three,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    paddingTop: 6,
+    backgroundColor: 'rgba(11, 14, 21, 0.95)',
+    borderTopWidth: 1,
+    borderTopColor: FundlyColors.surfaceContainerHigh,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
   },
-  innerContainer: {
-    paddingVertical: Spacing.two,
-    paddingHorizontal: Spacing.five,
-    borderRadius: Spacing.five,
+  dockSurface: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexGrow: 1,
-    gap: Spacing.two,
-    maxWidth: MaxContentWidth,
+    justifyContent: 'space-around',
+    width: '100%',
+    maxWidth: 500,
   },
-  brandText: {
-    marginRight: 'auto',
+  tabBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    minWidth: 58,
+    gap: 3,
+    transitionDuration: '150ms',
+  },
+  tabBtnActive: {
+    backgroundColor: FundlyColors.primaryContainer,
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+  },
+  tabBtnInactive: {
+    backgroundColor: 'transparent',
   },
   pressed: {
-    opacity: 0.7,
+    opacity: 0.75,
+    transform: [{ scale: 0.96 }],
   },
-  tabButtonView: {
-    paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Spacing.three,
+  tabIcon: {
+    fontSize: 18,
   },
-  externalPressable: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.one,
-    marginLeft: Spacing.three,
+  tabLabel: {
+    ...FundlyTypography.labelSm,
+  },
+  tabLabelActive: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+  tabLabelInactive: {
+    color: FundlyColors.outline,
+    fontWeight: '500',
   },
 });
