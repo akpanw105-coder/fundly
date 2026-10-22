@@ -193,10 +193,7 @@ export default function HomeScreen() {
             </Text>
             <Text style={styles.greetingDate}>December 2024</Text>
           </View>
-          <View style={styles.syncBadge}>
-            <View style={styles.syncDot} />
-            <Text style={styles.syncText}>Supabase Cloud</Text>
-          </View>
+
         </View>
 
         {/* Hero Total Balance Card */}
