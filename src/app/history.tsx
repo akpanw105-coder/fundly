@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
@@ -127,13 +127,16 @@ export default function HistoryScreen() {
     }
   }, [user]);
 
-  useEffect(() => {
-    if (user) {
-      fetchHistory();
-    } else if (!authLoading) {
-      setLoading(false);
-    }
-  }, [user, authLoading, fetchHistory]);
+  // Auto-refresh whenever History screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        fetchHistory();
+      } else if (!authLoading) {
+        setLoading(false);
+      }
+    }, [user, authLoading, fetchHistory])
+  );
 
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -197,12 +200,6 @@ export default function HistoryScreen() {
         </View>
 
         <View style={styles.headerRight}>
-          <Pressable
-            style={styles.headerActionBtn}
-            hitSlop={8}
-            onPress={() => router.push('/add-transaction')}>
-            <Text style={styles.headerPlusIcon}>＋</Text>
-          </Pressable>
           <Pressable
             style={styles.avatar}
             onPress={() => router.push('/settings')}>
@@ -316,13 +313,8 @@ export default function HistoryScreen() {
             <Text style={styles.emptyDesc}>
               {searchQuery || selectedFilter !== 'All'
                 ? 'No results match your search or filter.'
-                : 'Start adding transactions to see your history here.'}
+                : 'Transactions created on the Home screen will appear here.'}
             </Text>
-            <Pressable
-              style={styles.resetBtn}
-              onPress={() => router.push('/add-transaction')}>
-              <Text style={styles.resetBtnText}>+ Add Transaction</Text>
-            </Pressable>
           </View>
         ) : (
           groupedItems.map(([dateGroup, groupData]) => (

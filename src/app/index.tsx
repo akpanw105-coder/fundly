@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 import { BalanceCard } from '@/components/fundly/BalanceCard';
 import { PeriodFilter } from '@/components/fundly/PeriodFilter';
@@ -123,14 +123,17 @@ export default function HomeScreen() {
     }
   }, [user]);
 
-  useEffect(() => {
-    if (user) {
-      loadFinancialData();
-    } else if (!authLoading) {
-      // Auth finished resolving but no user — clear spinner
-      setLoadingData(false);
-    }
-  }, [user, authLoading, loadFinancialData]);
+  // Auto-refresh financial data whenever Home screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        loadFinancialData();
+      } else if (!authLoading) {
+        // Auth finished resolving but no user — clear spinner
+        setLoadingData(false);
+      }
+    }, [user, authLoading, loadFinancialData])
+  );
 
   const greeting = () => {
     const h = new Date().getHours();

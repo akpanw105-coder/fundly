@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
@@ -79,13 +79,15 @@ export default function GoalsScreen() {
     }
   }, [user]);
 
-  useEffect(() => {
-    if (user) {
-      fetchGoals();
-    } else if (!authLoading) {
-      setLoading(false);
-    }
-  }, [user, authLoading, fetchGoals]);
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        fetchGoals();
+      } else if (!authLoading) {
+        setLoading(false);
+      }
+    }, [user, authLoading, fetchGoals])
+  );
 
   // Expose a refresh that home can call after adding a transaction
   const onRefresh = () => fetchGoals(true);
@@ -324,9 +326,6 @@ export default function GoalsScreen() {
               <Text style={styles.emptyStateDesc}>
                 Tap the + button to set your first savings target and start building wealth.
               </Text>
-              <Pressable style={styles.emptyStateBtn} onPress={() => setIsAdding(true)}>
-                <Text style={styles.emptyStateBtnText}>+ Create First Goal</Text>
-              </Pressable>
             </View>
           ) : (
             <View style={styles.goalsList}>
