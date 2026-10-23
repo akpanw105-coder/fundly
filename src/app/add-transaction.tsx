@@ -40,24 +40,39 @@ export default function AddTransactionScreen() {
   const { user } = useAuth();
 
   const [txType, setTxType] = useState<'expense' | 'income'>('expense');
-  const [amount, setAmount] = useState(0);
+  const [amountStr, setAmountStr] = useState('0');
   const [selectedCategory, setSelectedCategory] = useState<CategoryOption>(CATEGORIES[0]);
   const [description, setDescription] = useState('');
+  const [dateStr, setDateStr] = useState(() => new Date().toISOString().split('T')[0]);
   const [selectedPayment, setSelectedPayment] = useState<typeof PAYMENT_METHODS[number]>('Cash');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const numericAmount = parseFloat(amountStr.replace(/[^0-9.]/g, '')) || 0;
+
   const adjustAmount = (delta: number) => {
-    setAmount(prev => Math.max(0, prev + delta));
+    const current = parseFloat(amountStr.replace(/[^0-9.]/g, '')) || 0;
+    const next = Math.max(0, current + delta);
+    setAmountStr(next.toString());
+  };
+
+  const handleAmountChange = (text: string) => {
+    // Keep numbers and at most one decimal point
+    const cleaned = text.replace(/[^0-9.]/g, '');
+    const parts = cleaned.split('.');
+    if (parts.length > 2) return;
+    setAmountStr(cleaned);
   };
 
   const handleSave = async () => {
+    if (saveStatus !== 'idle') return; // Prevent duplicate submissions
+
     if (!user) {
       router.replace('/auth');
       return;
     }
 
-    if (amount <= 0) {
+    if (numericAmount <= 0) {
       setErrorMsg('Please enter an amount greater than zero.');
       return;
     }
@@ -68,23 +83,28 @@ export default function AddTransactionScreen() {
     const isInc = txType === 'income';
 
     try {
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
       const { error } = await supabase.from('transactions').insert({
         user_id: user.id,
         name: description.trim() || (isInc ? 'Income Payment' : `${selectedCategory.name} Expense`),
         category: selectedCategory.name,
         category_display: selectedCategory.name,
-        amount: amount,
+        amount: numericAmount,
         is_income: isInc,
         payment_method: selectedPayment,
         note: `${selectedPayment} Payment`,
         emoji: selectedCategory.icon,
         icon_bg: isInc ? 'rgba(78, 222, 163, 0.20)' : 'rgba(255, 180, 171, 0.20)',
         icon_color: isInc ? FundlyColors.secondary : FundlyColors.error,
-        date: new Date().toISOString().split('T')[0],
+        date: dateStr || new Date().toISOString().split('T')[0],
+        time_display: timeStr,
       });
 
       if (error) {
-        setErrorMsg('Failed to save. Please try again.');
+        console.warn('Database error inserting transaction:', error);
+        setErrorMsg(error.message || 'Failed to save transaction. Please try again.');
         setSaveStatus('idle');
         return;
       }
@@ -92,8 +112,9 @@ export default function AddTransactionScreen() {
       setSaveStatus('saved');
       setTimeout(() => {
         router.back();
-      }, 700);
+      }, 600);
     } catch (e: any) {
+      console.warn('Error in transaction submission:', e);
       setErrorMsg(e.message || 'Something went wrong. Please try again.');
       setSaveStatus('idle');
     }
@@ -162,14 +183,19 @@ export default function AddTransactionScreen() {
 
         {/* Hero Amount Display */}
         <View style={styles.amountDisplayCard}>
-          <Text style={styles.amountPrompt}>TRANSACTION AMOUNT</Text>
+          <Text style={styles.amountPrompt}>TRANSACTION AMOUNT (₦)</Text>
           <View style={styles.amountRow}>
             <Text style={styles.amountCurrency}>₦</Text>
-            <Text style={styles.amountBigNumber}>
-              {amount.toLocaleString('en-NG')}
-            </Text>
+            <TextInput
+              style={styles.amountBigNumberInput}
+              value={amountStr === '0' ? '' : amountStr}
+              onChangeText={handleAmountChange}
+              placeholder="0"
+              placeholderTextColor={FundlyColors.outline}
+              keyboardType="decimal-pad"
+              autoFocus={false}
+            />
             <Text style={styles.amountDecimals}>.00</Text>
-            <View style={styles.cursorBlink} />
           </View>
 
           {/* Quick Increment Bubbles */}
@@ -183,7 +209,7 @@ export default function AddTransactionScreen() {
             <Pressable style={styles.bubbleBtn} onPress={() => adjustAmount(10000)}>
               <Text style={styles.bubbleText}>+₦10k</Text>
             </Pressable>
-            <Pressable style={styles.bubbleResetBtn} onPress={() => setAmount(0)}>
+            <Pressable style={styles.bubbleResetBtn} onPress={() => setAmountStr('0')}>
               <Text style={styles.bubbleResetText}>Reset</Text>
             </Pressable>
           </View>
@@ -234,6 +260,21 @@ export default function AddTransactionScreen() {
               value={description}
               onChangeText={setDescription}
               placeholder="e.g. Lunch at Yellow Chilli"
+              placeholderTextColor={FundlyColors.outline}
+            />
+          </View>
+        </View>
+
+        {/* Form Fields: Date */}
+        <View style={styles.section}>
+          <Text style={styles.fieldLabel}>Transaction Date (YYYY-MM-DD)</Text>
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputIcon}>📅</Text>
+            <TextInput
+              style={styles.textInputField}
+              value={dateStr}
+              onChangeText={setDateStr}
+              placeholder="YYYY-MM-DD"
               placeholderTextColor={FundlyColors.outline}
             />
           </View>
@@ -436,24 +477,19 @@ const styles = StyleSheet.create({
     marginRight: 4,
     fontWeight: '600',
   },
-  amountBigNumber: {
+  amountBigNumberInput: {
     ...FundlyTypography.displayLg,
     color: FundlyColors.onSurface,
     fontWeight: '700',
+    minWidth: 60,
+    textAlign: 'center',
+    padding: 0,
     fontVariant: ['tabular-nums'],
   },
   amountDecimals: {
     ...FundlyTypography.headlineSm,
     color: FundlyColors.onSurfaceVariant,
     fontWeight: '500',
-  },
-  cursorBlink: {
-    width: 2,
-    height: 32,
-    backgroundColor: FundlyColors.primary,
-    marginLeft: 4,
-    alignSelf: 'center',
-    borderRadius: 1,
   },
   quickAddRow: {
     flexDirection: 'row',

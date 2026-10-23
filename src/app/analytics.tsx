@@ -16,6 +16,7 @@ import { PeriodFilter } from '@/components/fundly/PeriodFilter';
 import { SpendingChart, Category } from '@/components/fundly/SpendingChart';
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
+import { calculateFinancialSummary, getDateFilterRange, DbTransaction } from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
 
 interface MonthlyTrend {
@@ -45,6 +46,7 @@ export default function AnalyticsScreen() {
   const [totalExpenses, setTotalExpenses] = useState<number>(0);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const fetchAnalytics = useCallback(async (isRefresh = false) => {
     if (!user) return;
@@ -53,104 +55,75 @@ export default function AnalyticsScreen() {
     } else {
       setLoading(true);
     }
+    setErrorMsg('');
 
     try {
-      // Calculate date filter based on selected period
-      const now = new Date();
-      let startDateStr = '';
-
-      if (selectedPeriod === 'week') {
-        const d = new Date(now);
-        d.setDate(d.getDate() - 7);
-        startDateStr = d.toISOString().split('T')[0];
-      } else if (selectedPeriod === 'month') {
-        const d = new Date(now.getFullYear(), now.getMonth(), 1);
-        startDateStr = d.toISOString().split('T')[0];
-      } else if (selectedPeriod === 'year') {
-        const d = new Date(now.getFullYear(), 0, 1);
-        startDateStr = d.toISOString().split('T')[0];
-      }
+      const { startDate } = getDateFilterRange(selectedPeriod);
 
       let query = supabase
         .from('transactions')
         .select('*')
         .eq('user_id', user.id);
 
-      if (startDateStr) {
-        query = query.gte('date', startDateStr);
+      if (startDate) {
+        query = query.gte('date', startDate);
       }
 
       const { data, error } = await query;
 
       if (error) throw error;
 
-      if (data && data.length > 0) {
-        let totalExp = 0;
-        let totalInc = 0;
-        const catMap: Record<string, number> = {};
+      const rawList: DbTransaction[] = data || [];
+      const summary = calculateFinancialSummary(rawList);
 
-        data.forEach((t: any) => {
-          const amt = Number(t.amount) || 0;
-          if (t.is_income) {
-            totalInc += amt;
-          } else {
-            totalExp += amt;
-            const cat = t.category || 'General';
-            catMap[cat] = (catMap[cat] || 0) + amt;
-          }
+      setTotalIncome(summary.totalIncome);
+      setTotalExpenses(summary.totalExpenses);
+
+      if (summary.totalExpenses > 0) {
+        const colorList = [
+          FundlyColors.categoryFood,
+          FundlyColors.categoryTransport,
+          FundlyColors.categoryUtilities,
+          FundlyColors.categorySubscriptions,
+          '#c084fc',
+          '#38bdf8',
+          '#facc15',
+        ];
+
+        const catArray: Category[] = Object.keys(summary.expenseCategoryTotals).map((catName, i) => {
+          const catAmt = summary.expenseCategoryTotals[catName];
+          const pct = Math.round((catAmt / summary.totalExpenses) * 1000) / 10;
+          return {
+            label: catName,
+            percentage: pct,
+            amount: `₦${(catAmt / 1000).toFixed(0)}k`,
+            color: colorList[i % colorList.length],
+          };
         });
 
-        setTotalIncome(totalInc);
-        setTotalExpenses(totalExp);
-
-        if (totalExp > 0) {
-          const colorList = [
-            FundlyColors.categoryFood,
-            FundlyColors.categoryTransport,
-            FundlyColors.categoryUtilities,
-            FundlyColors.categorySubscriptions,
-            '#c084fc',
-            '#38bdf8',
-            '#facc15',
-          ];
-
-          const catArray: Category[] = Object.keys(catMap).map((catName, i) => {
-            const catAmt = catMap[catName];
-            const pct = Math.round((catAmt / totalExp) * 1000) / 10;
-            return {
-              label: catName,
-              percentage: pct,
-              amount: `₦${(catAmt / 1000).toFixed(0)}k`,
-              color: colorList[i % colorList.length],
-            };
-          });
-
-          setCategories(catArray);
-        } else {
-          setCategories([]);
-        }
-
-        // Update current month trend with actual user numbers
-        if (totalInc > 0 || totalExp > 0) {
-          setTrends(prev => {
-            const updated = [...prev];
-            const currentMonthName = now.toLocaleString('en-US', { month: 'short' });
-            updated[4] = {
-              month: currentMonthName,
-              income: totalInc,
-              expenses: totalExp,
-              savings: totalInc - totalExp,
-            };
-            return updated;
-          });
-        }
+        setCategories(catArray);
       } else {
-        setTotalIncome(0);
-        setTotalExpenses(0);
         setCategories([]);
       }
-    } catch (e) {
+
+      // Update current month trend with actual user numbers
+      const now = new Date();
+      if (summary.totalIncome > 0 || summary.totalExpenses > 0) {
+        setTrends(prev => {
+          const updated = [...prev];
+          const currentMonthName = now.toLocaleString('en-US', { month: 'short' });
+          updated[4] = {
+            month: currentMonthName,
+            income: summary.totalIncome,
+            expenses: summary.totalExpenses,
+            savings: summary.netCashFlow,
+          };
+          return updated;
+        });
+      }
+    } catch (e: any) {
       console.warn('Error fetching analytics:', e);
+      setErrorMsg('Could not load analytics. Tap to retry.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -207,6 +180,17 @@ export default function AnalyticsScreen() {
         }>
         {/* Period Filter */}
         <PeriodFilter onChange={setSelectedPeriod} />
+
+        {/* Error state with retry */}
+        {errorMsg ? (
+          <Pressable style={styles.errorBanner} onPress={() => fetchAnalytics()}>
+            <Text style={styles.errorBannerText}>{errorMsg}</Text>
+          </Pressable>
+        ) : null}
+
+        {loading && (
+          <ActivityIndicator color={FundlyColors.primary} style={{ marginVertical: 16 }} />
+        )}
 
         {/* Hero Cash Flow Summary */}
         <View style={styles.heroCard}>
@@ -611,5 +595,18 @@ const styles = StyleSheet.create({
   highlightText: {
     color: FundlyColors.secondary,
     fontWeight: '700',
+  },
+  errorBanner: {
+    backgroundColor: 'rgba(255, 180, 171, 0.15)',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 180, 171, 0.3)',
+    alignItems: 'center',
+  },
+  errorBannerText: {
+    ...FundlyTypography.labelMd,
+    color: FundlyColors.error,
+    fontWeight: '600',
   },
 });

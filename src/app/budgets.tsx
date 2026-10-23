@@ -15,6 +15,7 @@ import { useRouter } from 'expo-router';
 
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
+import { calculateFinancialSummary, getDateFilterRange, getCategorySpending, DbTransaction } from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
 
 interface BudgetItem {
@@ -60,38 +61,27 @@ export default function BudgetsScreen() {
 
       if (budgetErr) throw budgetErr;
 
-      // 2. Fetch user's transactions to calculate actual spent per category
+      // 2. Fetch user's current month transactions to calculate actual spent per category
+      const { startDate, endDate } = getDateFilterRange('month');
+
       const { data: txData, error: txErr } = await supabase
         .from('transactions')
-        .select('category, amount, is_income')
+        .select('*')
         .eq('user_id', user.id)
-        .eq('is_income', false);
+        .gte('date', startDate)
+        .lte('date', endDate);
 
       if (txErr) throw txErr;
 
-      const spentMap: Record<string, number> = {};
-      if (txData) {
-        txData.forEach((t: any) => {
-          const rawCat = (t.category || 'General').toLowerCase().trim();
-          spentMap[rawCat] = (spentMap[rawCat] || 0) + Number(t.amount);
-        });
-      }
-
-      const getSpent = (catName: string) => {
-        const norm = catName.toLowerCase().trim();
-        let total = spentMap[norm] || 0;
-        if (norm.includes('food')) {
-          total = (spentMap['food'] || 0) + (spentMap['food & dining'] || 0);
-        }
-        return total;
-      };
+      const rawList: DbTransaction[] = txData || [];
+      const summary = calculateFinancialSummary(rawList);
 
       if (budgetData && budgetData.length > 0) {
         const mapped: BudgetItem[] = budgetData.map((b: any) => ({
           id: b.id,
           category: b.category,
           allocated: Number(b.allocated),
-          spent: getSpent(b.category),
+          spent: getCategorySpending(summary.expenseCategoryTotals, b.category),
           icon: b.icon || '🥧',
           color: b.color || FundlyColors.primary,
           iconBg: b.icon_bg || 'rgba(37, 99, 235, 0.20)',
@@ -122,14 +112,14 @@ export default function BudgetsScreen() {
           id: idx.toString(),
           category: e.category,
           allocated: e.allocated,
-          spent: getSpent(e.category),
+          spent: getCategorySpending(summary.expenseCategoryTotals, e.category),
           icon: e.icon,
           color: e.color,
           iconBg: 'rgba(37, 99, 235, 0.20)',
         }));
         setBudgets(reMapped);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Error fetching budgets:', e);
       setErrorMsg('Could not load budgets. Pull down to retry.');
     } finally {

@@ -18,6 +18,7 @@ import { Category, SpendingChart } from '@/components/fundly/SpendingChart';
 import { Transaction, TransactionItem } from '@/components/fundly/TransactionItem';
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
+import { calculateFinancialSummary, formatNaira, DbTransaction } from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
 
 export default function HomeScreen() {
@@ -55,24 +56,16 @@ export default function HomeScreen() {
         .from('transactions')
         .select('*')
         .eq('user_id', user.id)
-        .order('date', { ascending: false });
+        .order('date', { ascending: false })
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
 
-      let totalInc = 0;
-      let totalExp = 0;
-      const catMap: Record<string, number> = {};
+      const rawList: DbTransaction[] = data || [];
+      const summary = calculateFinancialSummary(rawList);
 
-      const mapped: Transaction[] = (data || []).map((t: any) => {
+      const mapped: Transaction[] = rawList.map(t => {
         const num = Number(t.amount) || 0;
-        if (t.is_income) {
-          totalInc += num;
-        } else {
-          totalExp += num;
-          const cat = t.category || 'General';
-          catMap[cat] = (catMap[cat] || 0) + num;
-        }
-
         return {
           id: t.id,
           name: t.name,
@@ -92,13 +85,12 @@ export default function HomeScreen() {
       });
 
       setTransactions(mapped);
-      setIncomeTotal(`₦${totalInc.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
-      setExpenseTotal(`₦${totalExp.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
-      const netBal = totalInc - totalExp;
-      setBalance(`₦${netBal.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
+      setIncomeTotal(formatNaira(summary.totalIncome));
+      setExpenseTotal(formatNaira(summary.totalExpenses));
+      setBalance(formatNaira(summary.balance));
 
       // Build spending categories from real data
-      if (totalExp > 0) {
+      if (summary.totalExpenses > 0) {
         const colorList = [
           FundlyColors.categoryFood,
           FundlyColors.categoryTransport,
@@ -108,9 +100,9 @@ export default function HomeScreen() {
           '#38bdf8',
           '#facc15',
         ];
-        const cats: Category[] = Object.keys(catMap).map((catName, i) => {
-          const catAmt = catMap[catName];
-          const pct = Math.round((catAmt / totalExp) * 1000) / 10;
+        const cats: Category[] = Object.keys(summary.expenseCategoryTotals).map((catName, i) => {
+          const catAmt = summary.expenseCategoryTotals[catName];
+          const pct = Math.round((catAmt / summary.totalExpenses) * 1000) / 10;
           return {
             label: catName,
             percentage: pct,
