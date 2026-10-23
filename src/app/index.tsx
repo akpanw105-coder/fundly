@@ -25,7 +25,7 @@ export default function HomeScreen() {
   const { session, user, isLoading: authLoading } = useAuth();
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loadingData, setLoadingData] = useState(true);
+  const [loadingData, setLoadingData] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [balance, setBalance] = useState('₦0.00');
@@ -134,8 +134,11 @@ export default function HomeScreen() {
   useEffect(() => {
     if (user) {
       loadFinancialData();
+    } else if (!authLoading) {
+      // Auth finished resolving but no user — clear spinner
+      setLoadingData(false);
     }
-  }, [user, loadFinancialData]);
+  }, [user, authLoading, loadFinancialData]);
 
   const greeting = () => {
     const h = new Date().getHours();

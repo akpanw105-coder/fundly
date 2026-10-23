@@ -38,10 +38,10 @@ const CATEGORY_CHIPS = ['All', 'Income', 'Expenses', 'Food', 'Transport', 'Bills
 
 export default function HistoryScreen() {
   const router = useRouter();
-  const { user, session } = useAuth();
+  const { user, session, isLoading: authLoading } = useAuth();
 
   const [items, setItems] = useState<HistoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -129,8 +129,10 @@ export default function HistoryScreen() {
   useEffect(() => {
     if (user) {
       fetchHistory();
+    } else if (!authLoading) {
+      setLoading(false);
     }
-  }, [user, fetchHistory]);
+  }, [user, authLoading, fetchHistory]);
 
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -257,7 +259,7 @@ export default function HistoryScreen() {
           <View style={styles.horizonRow}>
             <View style={styles.horizonBadge}>
               <Text style={styles.calIcon}>📅</Text>
-              <Text style={styles.horizonText}>This Month (Dec 2024)</Text>
+              <Text style={styles.horizonText}>This Month ({new Date().toLocaleString('en-NG', { month: 'long', year: 'numeric' })})</Text>
             </View>
 
             <View style={styles.horizonTotalCol}>

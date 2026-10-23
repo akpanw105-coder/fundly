@@ -29,10 +29,10 @@ interface SavingsGoal {
 
 export default function GoalsScreen() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [goals, setGoals] = useState<SavingsGoal[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isAdding, setIsAdding] = useState(false);
@@ -82,8 +82,10 @@ export default function GoalsScreen() {
   useEffect(() => {
     if (user) {
       fetchGoals();
+    } else if (!authLoading) {
+      setLoading(false);
     }
-  }, [user, fetchGoals]);
+  }, [user, authLoading, fetchGoals]);
 
   // Expose a refresh that home can call after adding a transaction
   const onRefresh = () => fetchGoals(true);

@@ -29,16 +29,18 @@ interface BudgetItem {
 
 export default function BudgetsScreen() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [budgets, setBudgets] = useState<BudgetItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isAddingBudget, setIsAddingBudget] = useState(false);
   const [newCategory, setNewCategory] = useState('');
   const [newLimit, setNewLimit] = useState('');
   const [formError, setFormError] = useState('');
+
+  const currentMonthYear = new Date().toISOString().slice(0, 7);
 
   const fetchBudgetsAndExpenses = useCallback(async (isRefresh = false) => {
     if (!user) return;
@@ -109,7 +111,7 @@ export default function BudgetsScreen() {
             user_id: user.id,
             category: env.category,
             allocated: env.allocated,
-            month_year: '2024-12',
+            month_year: currentMonthYear,
             icon: env.icon,
             color: env.color,
             icon_bg: 'rgba(37, 99, 235, 0.20)',
@@ -134,13 +136,15 @@ export default function BudgetsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [user, currentMonthYear]);
 
   useEffect(() => {
     if (user) {
       fetchBudgetsAndExpenses();
+    } else if (!authLoading) {
+      setLoading(false);
     }
-  }, [user, fetchBudgetsAndExpenses]);
+  }, [user, authLoading, fetchBudgetsAndExpenses]);
 
   const totalSpent = budgets.reduce((acc, b) => acc + b.spent, 0);
   const totalAllocated = budgets.reduce((acc, b) => acc + b.allocated, 0);
@@ -224,7 +228,7 @@ export default function BudgetsScreen() {
         user_id: user.id,
         category: newCategory.trim(),
         allocated: limitNum,
-        month_year: '2024-12',
+        month_year: currentMonthYear,
         icon: '🎯',
         color: FundlyColors.primary,
         icon_bg: 'rgba(37, 99, 235, 0.2)',
@@ -281,7 +285,9 @@ export default function BudgetsScreen() {
         {/* Month Selector Card */}
         <View style={styles.monthHeaderRow}>
           <View>
-            <Text style={styles.monthTitle}>December 2024</Text>
+            <Text style={styles.monthTitle}>
+              {new Date().toLocaleString('en-NG', { month: 'long', year: 'numeric' })}
+            </Text>
             <Text style={styles.monthSub}>Monthly Budget</Text>
           </View>
           <View style={styles.budgetStatusPill}>

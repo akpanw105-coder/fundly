@@ -35,7 +35,7 @@ const DEFAULT_MONTHLY_TRENDS: MonthlyTrend[] = [
 
 export default function AnalyticsScreen() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
 
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month' | 'year'>('month');
   const [activeTrendIdx, setActiveTrendIdx] = useState<number>(4);
@@ -55,10 +55,32 @@ export default function AnalyticsScreen() {
     }
 
     try {
-      const { data, error } = await supabase
+      // Calculate date filter based on selected period
+      const now = new Date();
+      let startDateStr = '';
+
+      if (selectedPeriod === 'week') {
+        const d = new Date(now);
+        d.setDate(d.getDate() - 7);
+        startDateStr = d.toISOString().split('T')[0];
+      } else if (selectedPeriod === 'month') {
+        const d = new Date(now.getFullYear(), now.getMonth(), 1);
+        startDateStr = d.toISOString().split('T')[0];
+      } else if (selectedPeriod === 'year') {
+        const d = new Date(now.getFullYear(), 0, 1);
+        startDateStr = d.toISOString().split('T')[0];
+      }
+
+      let query = supabase
         .from('transactions')
         .select('*')
         .eq('user_id', user.id);
+
+      if (startDateStr) {
+        query = query.gte('date', startDateStr);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
 
@@ -79,8 +101,9 @@ export default function AnalyticsScreen() {
         });
 
         setTotalIncome(totalInc);
+        setTotalExpenses(totalExp);
+
         if (totalExp > 0) {
-          setTotalExpenses(totalExp);
           const colorList = [
             FundlyColors.categoryFood,
             FundlyColors.categoryTransport,
@@ -103,22 +126,27 @@ export default function AnalyticsScreen() {
           });
 
           setCategories(catArray);
+        } else {
+          setCategories([]);
         }
 
-        // Update Dec trend with actual user numbers
+        // Update current month trend with actual user numbers
         if (totalInc > 0 || totalExp > 0) {
           setTrends(prev => {
             const updated = [...prev];
+            const currentMonthName = now.toLocaleString('en-US', { month: 'short' });
             updated[4] = {
-              month: 'Dec',
-              income: totalInc || updated[4].income,
-              expenses: totalExp || updated[4].expenses,
-              savings: (totalInc || updated[4].income) - (totalExp || updated[4].expenses),
+              month: currentMonthName,
+              income: totalInc,
+              expenses: totalExp,
+              savings: totalInc - totalExp,
             };
             return updated;
           });
         }
       } else {
+        setTotalIncome(0);
+        setTotalExpenses(0);
         setCategories([]);
       }
     } catch (e) {
@@ -127,13 +155,15 @@ export default function AnalyticsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [user, selectedPeriod]);
 
   useEffect(() => {
     if (user) {
       fetchAnalytics();
+    } else if (!authLoading) {
+      setLoading(false);
     }
-  }, [user, fetchAnalytics]);
+  }, [user, authLoading, fetchAnalytics]);
 
   const activeTrend = trends[activeTrendIdx] || DEFAULT_MONTHLY_TRENDS[4];
   const maxBarValue = Math.max(...trends.map(t => Math.max(t.income, t.expenses, 2000000)));
@@ -181,7 +211,9 @@ export default function AnalyticsScreen() {
         {/* Hero Cash Flow Summary */}
         <View style={styles.heroCard}>
           <View style={styles.heroHeader}>
-            <Text style={styles.heroSub}>NET CASH FLOW ({activeTrend.month.toUpperCase()} 2024)</Text>
+            <Text style={styles.heroSub}>
+              NET CASH FLOW ({activeTrend.month.toUpperCase()} {new Date().getFullYear()})
+            </Text>
             {totalIncome > 0 && totalExpenses > 0 && (
               <View style={styles.rateBadge}>
                 <Text style={styles.rateText}>
@@ -232,6 +264,7 @@ export default function AnalyticsScreen() {
               const isSelected = idx === activeTrendIdx;
               const incomeHeight = (trend.income / maxBarValue) * 120;
               const expenseHeight = (trend.expenses / maxBarValue) * 120;
+              const netTrend = trend.income - trend.expenses;
 
               return (
                 <Pressable
@@ -241,7 +274,9 @@ export default function AnalyticsScreen() {
                   {isSelected && (
                     <View style={styles.activeFloatChip}>
                       <Text style={styles.activeFloatText}>
-                        ₦{(trend.income - trend.expenses) > 1000000 ? '1.55M' : '1.1M'}
+                        ₦{netTrend >= 1000000
+                          ? `${(netTrend / 1000000).toFixed(2)}M`
+                          : `${(netTrend / 1000).toFixed(0)}k`}
                       </Text>
                     </View>
                   )}
