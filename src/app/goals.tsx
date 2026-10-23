@@ -408,6 +408,8 @@ export default function GoalsScreen() {
               })}
             </View>
           )}
+        </View>
+
         {/* Custom Deposit Card / Modal */}
         {depositGoalId && (
           <View style={styles.createCard}>

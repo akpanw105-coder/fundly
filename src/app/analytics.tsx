@@ -44,6 +44,7 @@ export default function AnalyticsScreen() {
   const [totalIncome, setTotalIncome] = useState<number>(0);
   const [totalExpenses, setTotalExpenses] = useState<number>(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const fetchAnalytics = useCallback(async (isRefresh = false) => {
     if (!user) return;
