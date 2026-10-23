@@ -26,12 +26,15 @@ export default function SettingsScreen() {
   const [offlineSyncEnabled, setOfflineSyncEnabled] = useState(true);
   const [biometricsEnabled, setBiometricsEnabled] = useState(true);
 
+  const [signOutError, setSignOutError] = useState('');
+
   const handleSignOut = async () => {
+    setSignOutError('');
     try {
       await signOut();
       router.replace('/auth');
     } catch (e: any) {
-      Alert.alert('Sign Out Error', e.message);
+      setSignOutError(e.message || 'Unable to sign out. Please check your connection.');
     }
   };
 
@@ -98,8 +101,8 @@ export default function SettingsScreen() {
 
           <View style={styles.settingItem}>
             <View>
-              <Text style={styles.settingLabel}>SQLite Offline Synchronization</Text>
-              <Text style={styles.settingSub}>Automatic reconciliation with cloud ledger</Text>
+              <Text style={styles.settingLabel}>Background Data Sync</Text>
+              <Text style={styles.settingSub}>Keep balances and analytics automatically up to date</Text>
             </View>
             <Pressable
               style={[
@@ -131,19 +134,15 @@ export default function SettingsScreen() {
             </View>
           </View>
 
-          <View style={styles.settingItem}>
-            <View>
-              <Text style={styles.settingLabel}>Cloud Database Endpoint</Text>
-              <Text style={styles.settingSub}>Supabase EU-Central Postgres 17</Text>
-            </View>
-            <View style={styles.statusBadge}>
-              <View style={styles.greenDot} />
-              <Text style={styles.statusText}>Connected</Text>
-            </View>
-          </View>
+
         </View>
 
         {/* Sign Out CTA */}
+        {signOutError ? (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorBoxText}>{signOutError}</Text>
+          </View>
+        ) : null}
         <Pressable
           style={({ pressed }) => [styles.signOutBtn, pressed && styles.signOutBtnPressed]}
           onPress={handleSignOut}>
@@ -353,5 +352,18 @@ const styles = StyleSheet.create({
     ...FundlyTypography.titleMd,
     color: FundlyColors.error,
     fontWeight: '700',
+  },
+  errorBox: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+  },
+  errorBoxText: {
+    ...FundlyTypography.bodyMd,
+    color: FundlyColors.error,
+    textAlign: 'center',
   },
 });

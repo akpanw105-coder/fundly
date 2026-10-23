@@ -1,13 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   ActivityIndicator,
-  Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,27 +20,18 @@ import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacin
 import { useAuth } from '@/context/auth';
 import { supabase } from '@/lib/supabase';
 
-const INITIAL_CATEGORIES: Category[] = [
-  { label: 'Food & Dining', percentage: 40.2, amount: '₦340k', color: FundlyColors.categoryFood },
-  { label: 'Transport', percentage: 21.8, amount: '₦185k', color: FundlyColors.categoryTransport },
-  { label: 'Utilities', percentage: 14.2, amount: '₦120k', color: FundlyColors.categoryUtilities },
-  { label: 'Subscriptions', percentage: 9.5, amount: '₦80k', color: FundlyColors.categorySubscriptions },
-];
-
 export default function HomeScreen() {
   const router = useRouter();
   const { session, user, isLoading: authLoading } = useAuth();
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loadingData, setLoadingData] = useState(true);
-  const [balance, setBalance] = useState('₦4,850,240.00');
-  const [incomeTotal, setIncomeTotal] = useState('₦2,400,000.00');
-  const [expenseTotal, setExpenseTotal] = useState('₦845,300.50');
-
-  const [modalVisible, setModalVisible] = useState(false);
-  const [txType, setTxType] = useState<'expense' | 'income'>('expense');
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [balance, setBalance] = useState('₦0.00');
+  const [incomeTotal, setIncomeTotal] = useState('₦0.00');
+  const [expenseTotal, setExpenseTotal] = useState('₦0.00');
+  const [spendingCategories, setSpendingCategories] = useState<Category[]>([]);
 
   // Access Control: redirect unauthenticated users to /auth
   useEffect(() => {
@@ -51,9 +41,14 @@ export default function HomeScreen() {
   }, [session, authLoading, router]);
 
   // Load transactions and calculate metrics
-  const loadFinancialData = useCallback(async () => {
+  const loadFinancialData = useCallback(async (isRefresh = false) => {
     if (!user) return;
-    setLoadingData(true);
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoadingData(true);
+    }
+    setErrorMsg('');
 
     try {
       const { data, error } = await supabase
@@ -64,43 +59,75 @@ export default function HomeScreen() {
 
       if (error) throw error;
 
-      if (data && data.length > 0) {
-        let totalInc = 0;
-        let totalExp = 0;
+      let totalInc = 0;
+      let totalExp = 0;
+      const catMap: Record<string, number> = {};
 
-        const mapped: Transaction[] = data.map((t: any) => {
-          const num = Number(t.amount) || 0;
-          if (t.is_income) totalInc += num;
-          else totalExp += num;
+      const mapped: Transaction[] = (data || []).map((t: any) => {
+        const num = Number(t.amount) || 0;
+        if (t.is_income) {
+          totalInc += num;
+        } else {
+          totalExp += num;
+          const cat = t.category || 'General';
+          catMap[cat] = (catMap[cat] || 0) + num;
+        }
 
+        return {
+          id: t.id,
+          name: t.name,
+          date: t.date,
+          category: t.category,
+          amount: `${t.is_income ? '+' : '-'}₦${num.toLocaleString('en-NG', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}`,
+          isIncome: t.is_income,
+          note: t.note || t.payment_method,
+          emoji: t.emoji || (t.is_income ? '💰' : '💸'),
+          iconBg: t.icon_bg || 'rgba(37, 99, 235, 0.20)',
+          iconColor: t.icon_color || FundlyColors.primary,
+          pending: t.is_pending,
+        };
+      });
+
+      setTransactions(mapped);
+      setIncomeTotal(`₦${totalInc.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
+      setExpenseTotal(`₦${totalExp.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
+      const netBal = totalInc - totalExp;
+      setBalance(`₦${netBal.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
+
+      // Build spending categories from real data
+      if (totalExp > 0) {
+        const colorList = [
+          FundlyColors.categoryFood,
+          FundlyColors.categoryTransport,
+          FundlyColors.categoryUtilities,
+          FundlyColors.categorySubscriptions,
+          '#c084fc',
+          '#38bdf8',
+          '#facc15',
+        ];
+        const cats: Category[] = Object.keys(catMap).map((catName, i) => {
+          const catAmt = catMap[catName];
+          const pct = Math.round((catAmt / totalExp) * 1000) / 10;
           return {
-            id: t.id,
-            name: t.name,
-            date: t.date,
-            category: t.category,
-            amount: `${t.is_income ? '+' : '-'}₦${num.toLocaleString('en-NG', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}`,
-            isIncome: t.is_income,
-            note: t.note || t.payment_method,
-            emoji: t.emoji || (t.is_income ? '💰' : '💸'),
-            iconBg: t.icon_bg || 'rgba(37, 99, 235, 0.20)',
-            iconColor: t.icon_color || FundlyColors.primary,
-            pending: t.is_pending,
+            label: catName,
+            percentage: pct,
+            amount: '₦' + (catAmt / 1000).toFixed(0) + 'k',
+            color: colorList[i % colorList.length],
           };
         });
-
-        setTransactions(mapped);
-        setIncomeTotal(`₦${totalInc.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
-        setExpenseTotal(`₦${totalExp.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
-        const netBal = 4850240 + totalInc - totalExp;
-        setBalance(`₦${netBal.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`);
+        setSpendingCategories(cats);
+      } else {
+        setSpendingCategories([]);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Error loading financial data:', e);
+      setErrorMsg('Unable to load your data. Tap to retry.');
     } finally {
       setLoadingData(false);
+      setRefreshing(false);
     }
   }, [user]);
 
@@ -110,40 +137,17 @@ export default function HomeScreen() {
     }
   }, [user, loadFinancialData]);
 
-  const handleAddTransaction = async () => {
-    if (!amount.trim() || !user) return;
-
-    const numAmount = parseFloat(amount.replace(/[^0-9.]/g, '')) || 0;
-    const isInc = txType === 'income';
-
-    try {
-      const { data, error } = await supabase.from('transactions').insert({
-        user_id: user.id,
-        name: note.trim() || (isInc ? 'Income Payment' : 'General Outflow'),
-        category: isInc ? 'Income' : 'General',
-        category_display: isInc ? 'Income' : 'General Expense',
-        amount: numAmount,
-        is_income: isInc,
-        payment_method: 'Card',
-        note: 'Quick Entry',
-        emoji: isInc ? '💰' : '💸',
-        icon_bg: isInc ? 'rgba(78, 222, 163, 0.20)' : 'rgba(255, 180, 171, 0.20)',
-        icon_color: isInc ? FundlyColors.secondary : FundlyColors.error,
-      }).select();
-
-      if (error) throw error;
-
-      if (data && data[0]) {
-        loadFinancialData();
-      }
-    } catch (e: any) {
-      console.warn('Failed to insert transaction:', e.message);
-    }
-
-    setAmount('');
-    setNote('');
-    setModalVisible(false);
+  const greeting = () => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
   };
+
+  const todayLabel = new Date().toLocaleDateString('en-NG', {
+    month: 'long',
+    year: 'numeric',
+  });
 
   if (authLoading) {
     return (
@@ -184,17 +188,30 @@ export default function HomeScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.contentContainer}
-        showsVerticalScrollIndicator={false}>
-        {/* User Status / Greeting */}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => loadFinancialData(true)}
+            tintColor={FundlyColors.primary}
+          />
+        }>
+        {/* User Greeting */}
         <View style={styles.greetingRow}>
           <View>
             <Text style={styles.greetingTitle}>
-              Good day, {user?.user_metadata?.full_name?.split(' ')[0] || 'Tunde'}
+              {greeting()}, {user?.user_metadata?.full_name?.split(' ')[0] || 'there'} 👋
             </Text>
-            <Text style={styles.greetingDate}>December 2024</Text>
+            <Text style={styles.greetingDate}>{todayLabel}</Text>
           </View>
-
         </View>
+
+        {/* Error state */}
+        {errorMsg ? (
+          <Pressable style={styles.errorBanner} onPress={() => loadFinancialData()}>
+            <Text style={styles.errorBannerText}>{errorMsg}</Text>
+          </Pressable>
+        ) : null}
 
         {/* Hero Total Balance Card */}
         <BalanceCard
@@ -206,11 +223,13 @@ export default function HomeScreen() {
         {/* Period Filter */}
         <PeriodFilter onChange={(_) => {}} />
 
-        {/* Spending By Category Chart */}
-        <SpendingChart
-          total={expenseTotal}
-          categories={INITIAL_CATEGORIES}
-        />
+        {/* Spending By Category Chart - only shown when data exists */}
+        {spendingCategories.length > 0 && (
+          <SpendingChart
+            total={expenseTotal}
+            categories={spendingCategories}
+          />
+        )}
 
         {/* Quick Add Action Button */}
         <Pressable
@@ -238,88 +257,21 @@ export default function HomeScreen() {
               ))
             ) : (
               <View style={styles.emptyTransactions}>
-                <Text style={styles.emptyText}>No transactions recorded yet in Supabase.</Text>
+                <Text style={styles.emptyIcon}>💸</Text>
+                <Text style={styles.emptyTitle}>No transactions yet</Text>
+                <Text style={styles.emptyText}>
+                  Start tracking your finances by adding your first transaction.
+                </Text>
+                <Pressable
+                  style={styles.emptyActionBtn}
+                  onPress={() => router.push('/add-transaction')}>
+                  <Text style={styles.emptyActionText}>+ Add Transaction</Text>
+                </Pressable>
               </View>
             )}
           </View>
         </View>
       </ScrollView>
-
-      {/* Quick Add Modal */}
-      <Modal
-        visible={modalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <Pressable style={styles.modalBackdrop} onPress={() => setModalVisible(false)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Quick Add Transaction</Text>
-              <Pressable
-                style={styles.modalCloseBtn}
-                onPress={() => setModalVisible(false)}
-                hitSlop={8}>
-                <Text style={styles.modalCloseText}>✕</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.typeSwitcher}>
-              <Pressable
-                style={[styles.typeBtn, txType === 'expense' && styles.typeBtnActive]}
-                onPress={() => setTxType('expense')}>
-                <Text
-                  style={[
-                    styles.typeBtnText,
-                    txType === 'expense' && styles.typeBtnTextActive,
-                  ]}>
-                  Expense
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.typeBtn, txType === 'income' && styles.typeBtnActive]}
-                onPress={() => setTxType('income')}>
-                <Text
-                  style={[
-                    styles.typeBtnText,
-                    txType === 'income' && styles.typeBtnTextActive,
-                  ]}>
-                  Income
-                </Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Amount (₦)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="0.00"
-                placeholderTextColor={FundlyColors.outline}
-                keyboardType="numeric"
-                value={amount}
-                onChangeText={setAmount}
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Note / Merchant</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Spar Lekki Grocery"
-                placeholderTextColor={FundlyColors.outline}
-                value={note}
-                onChangeText={setNote}
-              />
-            </View>
-
-            <Pressable
-              style={({ pressed }) => [styles.submitBtn, pressed && styles.submitBtnPressed]}
-              onPress={handleAddTransaction}>
-              <Text style={styles.submitBtnText}>Save to Supabase</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -417,25 +369,20 @@ const styles = StyleSheet.create({
   greetingDate: {
     ...FundlyTypography.bodyMd,
     color: FundlyColors.outline,
+    marginTop: 2,
   },
-  syncBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: FundlyColors.surfaceContainerHigh,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
+  errorBanner: {
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
   },
-  syncDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: FundlyColors.secondary,
-  },
-  syncText: {
-    ...FundlyTypography.labelSm,
-    color: FundlyColors.onSurfaceVariant,
+  errorBannerText: {
+    ...FundlyTypography.bodyMd,
+    color: FundlyColors.error,
+    textAlign: 'center',
   },
   addBtn: {
     flexDirection: 'row',
@@ -486,103 +433,35 @@ const styles = StyleSheet.create({
   },
   emptyTransactions: {
     backgroundColor: FundlyColors.surfaceContainerLow,
-    padding: 16,
-    borderRadius: 12,
+    padding: 24,
+    borderRadius: 16,
     alignItems: 'center',
+    gap: 8,
+  },
+  emptyIcon: {
+    fontSize: 36,
+    marginBottom: 4,
+  },
+  emptyTitle: {
+    ...FundlyTypography.titleMd,
+    color: FundlyColors.onSurface,
   },
   emptyText: {
     ...FundlyTypography.bodyMd,
     color: FundlyColors.outline,
+    textAlign: 'center',
+    maxWidth: 260,
   },
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-  },
-  modalBackdrop: {
-    flex: 1,
-  },
-  modalSheet: {
-    backgroundColor: FundlyColors.surfaceContainerLow,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 20,
-    gap: 16,
-    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  modalTitle: {
-    ...FundlyTypography.headlineSm,
-    color: FundlyColors.onSurface,
-  },
-  modalCloseBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: FundlyColors.surfaceContainer,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalCloseText: {
-    color: FundlyColors.outline,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  typeSwitcher: {
-    flexDirection: 'row',
-    backgroundColor: FundlyColors.surfaceContainer,
-    borderRadius: 999,
-    padding: 4,
-  },
-  typeBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderRadius: 999,
-  },
-  typeBtnActive: {
+  emptyActionBtn: {
+    marginTop: 8,
     backgroundColor: FundlyColors.primaryContainer,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 999,
   },
-  typeBtnText: {
+  emptyActionText: {
     ...FundlyTypography.labelMd,
-    color: FundlyColors.outline,
-  },
-  typeBtnTextActive: {
     color: '#ffffff',
     fontWeight: '600',
-  },
-  inputGroup: {
-    gap: 6,
-  },
-  inputLabel: {
-    ...FundlyTypography.labelMd,
-    color: FundlyColors.outline,
-  },
-  input: {
-    backgroundColor: FundlyColors.surfaceContainer,
-    color: FundlyColors.onSurface,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    ...FundlyTypography.bodyLg,
-  },
-  submitBtn: {
-    backgroundColor: FundlyColors.primaryContainer,
-    borderRadius: 14,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  submitBtnPressed: {
-    opacity: 0.9,
-  },
-  submitBtnText: {
-    ...FundlyTypography.titleMd,
-    color: '#ffffff',
   },
 });

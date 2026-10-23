@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -40,12 +41,17 @@ export default function AnalyticsScreen() {
   const [activeTrendIdx, setActiveTrendIdx] = useState<number>(4);
   const [trends, setTrends] = useState<MonthlyTrend[]>(DEFAULT_MONTHLY_TRENDS);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [totalExpenses, setTotalExpenses] = useState<number>(845300.5);
-  const [loading, setLoading] = useState(true);
+  const [totalIncome, setTotalIncome] = useState<number>(0);
+  const [totalExpenses, setTotalExpenses] = useState<number>(0);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const fetchAnalytics = useCallback(async () => {
+  const fetchAnalytics = useCallback(async (isRefresh = false) => {
     if (!user) return;
-    setLoading(true);
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
 
     try {
       const { data, error } = await supabase
@@ -71,6 +77,7 @@ export default function AnalyticsScreen() {
           }
         });
 
+        setTotalIncome(totalInc);
         if (totalExp > 0) {
           setTotalExpenses(totalExp);
           const colorList = [
@@ -97,31 +104,27 @@ export default function AnalyticsScreen() {
           setCategories(catArray);
         }
 
-        // Update active Dec trend with actual user numbers
+        // Update Dec trend with actual user numbers
         if (totalInc > 0 || totalExp > 0) {
           setTrends(prev => {
             const updated = [...prev];
             updated[4] = {
               month: 'Dec',
-              income: totalInc || 2400000,
-              expenses: totalExp || 845300,
-              savings: (totalInc || 2400000) - (totalExp || 845300),
+              income: totalInc || updated[4].income,
+              expenses: totalExp || updated[4].expenses,
+              savings: (totalInc || updated[4].income) - (totalExp || updated[4].expenses),
             };
             return updated;
           });
         }
       } else {
-        setCategories([
-          { label: 'Food & Dining', percentage: 40.2, amount: '₦340k', color: FundlyColors.categoryFood },
-          { label: 'Transport', percentage: 21.8, amount: '₦185k', color: FundlyColors.categoryTransport },
-          { label: 'Utilities', percentage: 14.2, amount: '₦120k', color: FundlyColors.categoryUtilities },
-          { label: 'Subscriptions', percentage: 9.5, amount: '₦80k', color: FundlyColors.categorySubscriptions },
-        ]);
+        setCategories([]);
       }
     } catch (e) {
       console.warn('Error fetching analytics:', e);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [user]);
 
@@ -163,7 +166,14 @@ export default function AnalyticsScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.contentContainer}
-        showsVerticalScrollIndicator={false}>
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => fetchAnalytics(true)}
+            tintColor={FundlyColors.primary}
+          />
+        }>
         {/* Period Filter */}
         <PeriodFilter onChange={setSelectedPeriod} />
 
@@ -171,9 +181,13 @@ export default function AnalyticsScreen() {
         <View style={styles.heroCard}>
           <View style={styles.heroHeader}>
             <Text style={styles.heroSub}>NET CASH FLOW ({activeTrend.month.toUpperCase()} 2024)</Text>
-            <View style={styles.rateBadge}>
-              <Text style={styles.rateText}>+64.8% savings</Text>
-            </View>
+            {totalIncome > 0 && totalExpenses > 0 && (
+              <View style={styles.rateBadge}>
+                <Text style={styles.rateText}>
+                  {Math.round(((totalIncome - totalExpenses) / totalIncome) * 100)}% savings
+                </Text>
+              </View>
+            )}
           </View>
 
           <Text style={styles.heroAmount}>
@@ -286,10 +300,10 @@ export default function AnalyticsScreen() {
         <View style={styles.insightCard}>
           <View style={styles.insightHeader}>
             <Text style={styles.insightEmoji}>💡</Text>
-            <Text style={styles.insightTitle}>Financial Health Observation</Text>
+            <Text style={styles.insightTitle}>Financial Health Tip</Text>
           </View>
           <Text style={styles.insightText}>
-            Your average monthly savings rate is currently <Text style={styles.highlightText}>64.8%</Text>, outperforming your target threshold by 14.8%. Your transactions are synced with Postgres RLS.
+            Track your income and expenses regularly to stay on top of your financial goals. A healthy savings rate of at least 20% of your monthly income is a great target to aim for.
           </Text>
         </View>
       </ScrollView>

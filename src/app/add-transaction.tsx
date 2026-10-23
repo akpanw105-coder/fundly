@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Platform,
   Pressable,
   ScrollView,
@@ -41,11 +40,12 @@ export default function AddTransactionScreen() {
   const { user } = useAuth();
 
   const [txType, setTxType] = useState<'expense' | 'income'>('expense');
-  const [amount, setAmount] = useState(18500);
+  const [amount, setAmount] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState<CategoryOption>(CATEGORIES[0]);
-  const [description, setDescription] = useState('Lunch at Yellow Chilli, VI');
+  const [description, setDescription] = useState('');
   const [selectedPayment, setSelectedPayment] = useState<typeof PAYMENT_METHODS[number]>('Cash');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
 
   const adjustAmount = (delta: number) => {
     setAmount(prev => Math.max(0, prev + delta));
@@ -57,6 +57,12 @@ export default function AddTransactionScreen() {
       return;
     }
 
+    if (amount <= 0) {
+      setErrorMsg('Please enter an amount greater than zero.');
+      return;
+    }
+
+    setErrorMsg('');
     setSaveStatus('saving');
 
     const isInc = txType === 'income';
@@ -74,10 +80,11 @@ export default function AddTransactionScreen() {
         emoji: selectedCategory.icon,
         icon_bg: isInc ? 'rgba(78, 222, 163, 0.20)' : 'rgba(255, 180, 171, 0.20)',
         icon_color: isInc ? FundlyColors.secondary : FundlyColors.error,
+        date: new Date().toISOString().split('T')[0],
       });
 
       if (error) {
-        Alert.alert('Save Error', error.message);
+        setErrorMsg('Failed to save. Please try again.');
         setSaveStatus('idle');
         return;
       }
@@ -87,7 +94,7 @@ export default function AddTransactionScreen() {
         router.back();
       }, 700);
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      setErrorMsg(e.message || 'Something went wrong. Please try again.');
       setSaveStatus('idle');
     }
   };
@@ -262,13 +269,12 @@ export default function AddTransactionScreen() {
           </View>
         </View>
 
-        {/* Discretion Notice */}
-        <View style={styles.offlineNotice}>
-          <Text style={styles.offlineNoticeIcon}>☁️</Text>
-          <Text style={styles.offlineNoticeText}>
-            Persisted securely to Supabase Cloud Postgres with RLS
-          </Text>
-        </View>
+        {/* Error message */}
+        {errorMsg ? (
+          <View style={styles.errorNotice}>
+            <Text style={styles.errorNoticeText}>{errorMsg}</Text>
+          </View>
+        ) : null}
 
         {/* Actions Container */}
         <View style={styles.actionsContainer}>
@@ -283,10 +289,10 @@ export default function AddTransactionScreen() {
             disabled={saveStatus !== 'idle'}>
             <Text style={styles.saveBtnText}>
               {saveStatus === 'idle'
-                ? 'Save to Supabase'
+                ? 'Save Transaction'
                 : saveStatus === 'saving'
-                ? 'Recording Ledger...'
-                : '✓ Transaction Logged!'}
+                ? 'Saving...'
+                : '✓ Transaction Saved!'}
             </Text>
           </Pressable>
 
@@ -593,22 +599,21 @@ const styles = StyleSheet.create({
   paymentPillTextUnselected: {
     color: FundlyColors.onSurfaceVariant,
   },
-  offlineNotice: {
+  errorNotice: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    backgroundColor: FundlyColors.surfaceContainerLowest,
+    backgroundColor: 'rgba(239, 68, 68, 0.10)',
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.25)',
   },
-  offlineNoticeIcon: {
-    fontSize: 16,
-  },
-  offlineNoticeText: {
+  errorNoticeText: {
     ...FundlyTypography.labelSm,
-    color: FundlyColors.onSurfaceVariant,
+    color: FundlyColors.error,
+    textAlign: 'center',
   },
   actionsContainer: {
     gap: 12,

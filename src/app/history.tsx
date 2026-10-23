@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -41,16 +42,46 @@ export default function HistoryScreen() {
 
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<string>('All');
-  const [offlineBannerDismissed, setOfflineBannerDismissed] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncedSuccessfully, setSyncedSuccessfully] = useState(false);
   const [selectedItem, setSelectedItem] = useState<HistoryItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
-  const fetchHistory = useCallback(async () => {
+  const handleDeleteTransaction = async (id: string) => {
     if (!user) return;
-    setLoading(true);
+    setDeleting(true);
+    setDeleteError('');
+
+    try {
+      const { error } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      setItems(prev => prev.filter(it => it.id !== id));
+      setSelectedItem(null);
+    } catch (e: any) {
+      console.warn('Error deleting transaction:', e.message);
+      setDeleteError(e.message || 'Failed to delete transaction.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const fetchHistory = useCallback(async (isRefresh = false) => {
+    if (!user) return;
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setErrorMsg('');
 
     try {
       const { data, error } = await supabase
@@ -88,8 +119,10 @@ export default function HistoryScreen() {
       }
     } catch (e) {
       console.warn('Error fetching history:', e);
+      setErrorMsg('Could not load transactions. Pull down to retry.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [user]);
 
@@ -98,18 +131,6 @@ export default function HistoryScreen() {
       fetchHistory();
     }
   }, [user, fetchHistory]);
-
-  const handleSync = () => {
-    setIsSyncing(true);
-    setTimeout(() => {
-      fetchHistory();
-      setIsSyncing(false);
-      setSyncedSuccessfully(true);
-      setTimeout(() => {
-        setOfflineBannerDismissed(true);
-      }, 2500);
-    }, 1200);
-  };
 
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -190,7 +211,14 @@ export default function HistoryScreen() {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.contentContainer}
-        showsVerticalScrollIndicator={false}>
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => fetchHistory(true)}
+            tintColor={FundlyColors.primary}
+          />
+        }>
         {/* Search & Filter Bar */}
         <View style={styles.searchSection}>
           <View style={styles.searchRow}>
@@ -259,53 +287,23 @@ export default function HistoryScreen() {
           </ScrollView>
         </View>
 
-        {/* Offline Status Banner */}
-        {!offlineBannerDismissed && (
-          <View
-            style={[
-              styles.offlineBanner,
-              syncedSuccessfully && styles.offlineBannerSuccess,
-            ]}>
-            <View style={styles.offlineLeft}>
-              <View
-                style={[
-                  styles.statusDot,
-                  syncedSuccessfully ? styles.statusDotGreen : styles.statusDotAmber,
-                ]}
-              />
-              <Text style={styles.offlineText} numberOfLines={1}>
-                {syncedSuccessfully
-                  ? 'All Supabase cloud records synchronized'
-                  : 'Cloud Database synchronization active'}
-              </Text>
-            </View>
 
-            {!syncedSuccessfully && (
-              <View style={styles.offlineActions}>
-                <Pressable
-                  onPress={handleSync}
-                  disabled={isSyncing}
-                  style={styles.syncBtn}
-                  hitSlop={6}>
-                  <Text style={styles.syncBtnText}>
-                    {isSyncing ? 'Syncing...' : '⚡ Sync'}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setOfflineBannerDismissed(true)}
-                  style={styles.dismissBtn}
-                  hitSlop={8}>
-                  <Text style={styles.dismissBtnText}>✕</Text>
-                </Pressable>
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* Loading Spinner */}
+        {/* Loading / Error / Empty / Content */}
         {loading ? (
           <ActivityIndicator size="large" color={FundlyColors.primary} style={{ marginVertical: 40 }} />
+        ) : errorMsg ? (
+          <View style={styles.emptyContainer}>
+            <View style={styles.emptyIconBox}>
+              <Text style={styles.emptyIcon}>⚠️</Text>
+            </View>
+            <Text style={styles.emptyTitle}>Something went wrong</Text>
+            <Text style={styles.emptyDesc}>{errorMsg}</Text>
+            <Pressable
+              style={styles.resetBtn}
+              onPress={() => fetchHistory()}>
+              <Text style={styles.resetBtnText}>Retry</Text>
+            </Pressable>
+          </View>
         ) : groupedItems.length === 0 ? (
           <View style={styles.emptyContainer}>
             <View style={styles.emptyIconBox}>
@@ -313,7 +311,9 @@ export default function HistoryScreen() {
             </View>
             <Text style={styles.emptyTitle}>No transactions found</Text>
             <Text style={styles.emptyDesc}>
-              We couldn&apos;t find matches in your Supabase account. Try recording a new transaction.
+              {searchQuery || selectedFilter !== 'All'
+                ? 'No results match your search or filter.'
+                : 'Start adding transactions to see your history here.'}
             </Text>
             <Pressable
               style={styles.resetBtn}
@@ -429,6 +429,19 @@ export default function HistoryScreen() {
                   {selectedItem.amount}
                 </Text>
               </View>
+
+              {deleteError ? (
+                <Text style={styles.deleteErrorText}>{deleteError}</Text>
+              ) : null}
+
+              <Pressable
+                style={[styles.deleteBtn, deleting && styles.deleteBtnDisabled]}
+                disabled={deleting}
+                onPress={() => handleDeleteTransaction(selectedItem.id)}>
+                <Text style={styles.deleteBtnText}>
+                  {deleting ? 'Deleting...' : 'Delete Transaction'}
+                </Text>
+              </Pressable>
             </View>
           </View>
         )}
@@ -623,65 +636,7 @@ const styles = StyleSheet.create({
   chipTextInactive: {
     color: FundlyColors.onSurfaceVariant,
   },
-  offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: FundlyColors.surfaceContainerHigh,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.3)',
-  },
-  offlineBannerSuccess: {
-    borderColor: 'rgba(78, 222, 163, 0.3)',
-    backgroundColor: 'rgba(78, 222, 163, 0.1)',
-  },
-  offlineLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-    minWidth: 0,
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  statusDotAmber: {
-    backgroundColor: '#fbbf24',
-  },
-  statusDotGreen: {
-    backgroundColor: FundlyColors.secondary,
-  },
-  offlineText: {
-    ...FundlyTypography.labelSm,
-    color: FundlyColors.onSurfaceVariant,
-    flex: 1,
-  },
-  offlineActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  syncBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  syncBtnText: {
-    ...FundlyTypography.labelSm,
-    color: FundlyColors.primary,
-    fontWeight: '700',
-  },
-  dismissBtn: {
-    padding: 4,
-  },
-  dismissBtnText: {
-    color: FundlyColors.outline,
-    fontSize: 14,
-  },
+
   emptyContainer: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -875,5 +830,28 @@ const styles = StyleSheet.create({
     ...FundlyTypography.titleMd,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
+  },
+  deleteBtn: {
+    marginTop: 8,
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  deleteBtnDisabled: {
+    opacity: 0.5,
+  },
+  deleteBtnText: {
+    ...FundlyTypography.labelMd,
+    color: FundlyColors.error,
+    fontWeight: '700',
+  },
+  deleteErrorText: {
+    ...FundlyTypography.labelSm,
+    color: FundlyColors.error,
+    textAlign: 'center',
+    marginTop: 4,
   },
 });
