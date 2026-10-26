@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
+import { FinancialSync } from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
 
 interface CategoryOption {
@@ -22,7 +23,7 @@ interface CategoryOption {
   color: string;
 }
 
-const CATEGORIES: CategoryOption[] = [
+const EXPENSE_CATEGORIES: CategoryOption[] = [
   { name: 'Food', icon: '🍽️', color: FundlyColors.tertiary },
   { name: 'Transport', icon: '🚗', color: FundlyColors.primary },
   { name: 'Shopping', icon: '🛍️', color: FundlyColors.primaryFixed },
@@ -33,6 +34,17 @@ const CATEGORIES: CategoryOption[] = [
   { name: 'Education', icon: '🎓', color: '#facc15' },
 ];
 
+const INCOME_CATEGORIES: CategoryOption[] = [
+  { name: 'Salary', icon: '💼', color: FundlyColors.secondary },
+  { name: 'Freelance', icon: '💻', color: FundlyColors.primary },
+  { name: 'Business', icon: '🏢', color: FundlyColors.primaryFixed },
+  { name: 'Investment', icon: '📈', color: '#38bdf8' },
+  { name: 'Gift', icon: '🎁', color: '#f472b6' },
+  { name: 'Rental', icon: '🏘️', color: '#c084fc' },
+  { name: 'Dividends', icon: '💰', color: '#facc15' },
+  { name: 'Other', icon: '💵', color: FundlyColors.tertiary },
+];
+
 const PAYMENT_METHODS = ['Cash', 'Card', 'Bank'] as const;
 
 export default function AddTransactionScreen() {
@@ -41,12 +53,21 @@ export default function AddTransactionScreen() {
 
   const [txType, setTxType] = useState<'expense' | 'income'>('expense');
   const [amountStr, setAmountStr] = useState('0');
-  const [selectedCategory, setSelectedCategory] = useState<CategoryOption>(CATEGORIES[0]);
+  const [selectedCategory, setSelectedCategory] = useState<CategoryOption>(EXPENSE_CATEGORIES[0]);
   const [description, setDescription] = useState('');
   const [dateStr, setDateStr] = useState(() => new Date().toISOString().split('T')[0]);
   const [selectedPayment, setSelectedPayment] = useState<typeof PAYMENT_METHODS[number]>('Cash');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+
+  const currentCategories = txType === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+
+  // Switch category to matching list when transaction type changes
+  const handleTypeChange = (type: 'expense' | 'income') => {
+    if (type === txType) return;
+    setTxType(type);
+    setSelectedCategory(type === 'income' ? INCOME_CATEGORIES[0] : EXPENSE_CATEGORIES[0]);
+  };
 
   const numericAmount = parseFloat(amountStr.replace(/[^0-9.]/g, '')) || 0;
 
@@ -110,6 +131,7 @@ export default function AddTransactionScreen() {
       }
 
       setSaveStatus('saved');
+      FinancialSync.notify();
       setTimeout(() => {
         router.back();
       }, 600);
@@ -153,7 +175,7 @@ export default function AddTransactionScreen() {
               styles.typeBtn,
               txType === 'expense' && styles.typeBtnExpenseActive,
             ]}
-            onPress={() => setTxType('expense')}>
+            onPress={() => handleTypeChange('expense')}>
             <Text style={styles.typeBtnIcon}>↓</Text>
             <Text
               style={[
@@ -169,7 +191,7 @@ export default function AddTransactionScreen() {
               styles.typeBtn,
               txType === 'income' && styles.typeBtnIncomeActive,
             ]}
-            onPress={() => setTxType('income')}>
+            onPress={() => handleTypeChange('income')}>
             <Text style={styles.typeBtnIcon}>↑</Text>
             <Text
               style={[
@@ -218,12 +240,14 @@ export default function AddTransactionScreen() {
         {/* Category Grid Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Select Category</Text>
+            <Text style={styles.sectionTitle}>
+              {txType === 'income' ? 'Income Source' : 'Expense Category'}
+            </Text>
             <Text style={styles.selectedCategoryLabel}>{selectedCategory.name}</Text>
           </View>
 
           <View style={styles.categoryGrid}>
-            {CATEGORIES.map(cat => {
+            {currentCategories.map(cat => {
               const isSelected = selectedCategory.name === cat.name;
               return (
                 <Pressable

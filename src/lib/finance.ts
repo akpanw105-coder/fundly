@@ -4,6 +4,31 @@
  * use consistent transaction processing, date boundaries, and financial rules.
  */
 
+type SyncEventListener = () => void;
+const syncListeners = new Set<SyncEventListener>();
+
+/**
+ * Event notifier called when transactions, budgets, or goal deposits change,
+ * signaling all active screens to refresh their data without requiring manual refresh.
+ */
+export const FinancialSync = {
+  subscribe(listener: SyncEventListener): () => void {
+    syncListeners.add(listener);
+    return () => {
+      syncListeners.delete(listener);
+    };
+  },
+  notify(): void {
+    for (const listener of syncListeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.warn('Error notifying financial sync listener:', err);
+      }
+    }
+  },
+};
+
 export interface DbTransaction {
   id: string;
   user_id: string;
@@ -84,6 +109,77 @@ export function formatNaira(amount: number, showDecimals: boolean = true): strin
     minimumFractionDigits: showDecimals ? 2 : 0,
     maximumFractionDigits: showDecimals ? 2 : 0,
   })}`;
+}
+
+
+export interface MonthlyTrend {
+  month: string;      // e.g. 'Oct'
+  fullMonthYear: string; // e.g. 'October 2026'
+  year: number;
+  monthIndex: number; // 0-11
+  income: number;
+  expenses: number;
+  savings: number;
+}
+
+/**
+ * Calculates historical monthly trends for the past N calendar months (default 5)
+ * based strictly on actual user transactions.
+ * Months with no transactions default to 0 income/expenses without inserting fake numbers.
+ */
+export function calculateHistoricalMonthlyTrends(
+  transactions: DbTransaction[],
+  monthsCount: number = 5,
+  baseDate: Date = new Date()
+): MonthlyTrend[] {
+  const trends: MonthlyTrend[] = [];
+
+  // Generate slots for the last `monthsCount` months in chronological order
+  for (let i = monthsCount - 1; i >= 0; i--) {
+    const d = new Date(baseDate.getFullYear(), baseDate.getMonth() - i, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const monthStr = d.toLocaleString('en-US', { month: 'short' });
+    const fullMonthYear = d.toLocaleString('en-NG', { month: 'long', year: 'numeric' });
+
+    trends.push({
+      month: monthStr,
+      fullMonthYear,
+      year: y,
+      monthIndex: m,
+      income: 0,
+      expenses: 0,
+      savings: 0,
+    });
+  }
+
+  // Aggregate transactions into the corresponding month slot
+  for (const tx of transactions) {
+    if (!tx.date) continue;
+    const parts = tx.date.split('-');
+    if (parts.length < 2) continue;
+    const txYear = parseInt(parts[0], 10);
+    const txMonth = parseInt(parts[1], 10) - 1; // 0-indexed month
+
+    const slot = trends.find(t => t.year === txYear && t.monthIndex === txMonth);
+    if (!slot) continue;
+
+    const amt = typeof tx.amount === 'number' ? tx.amount : parseFloat(String(tx.amount)) || 0;
+    if (amt <= 0) continue;
+
+    if (tx.is_income) {
+      slot.income += amt;
+    } else {
+      slot.expenses += amt;
+    }
+  }
+
+  // Calculate net savings for each month
+  for (const t of trends) {
+    t.savings = t.income - t.expenses;
+  }
+
+  return trends;
 }
 
 /**

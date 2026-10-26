@@ -15,6 +15,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
+import { FinancialSync } from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
 
 export interface HistoryItem {
@@ -34,7 +35,7 @@ export interface HistoryItem {
   isOffline?: boolean;
 }
 
-const CATEGORY_CHIPS = ['All', 'Income', 'Expenses', 'Food', 'Transport', 'Bills'] as const;
+const CATEGORY_CHIPS = ['All', 'Income', 'Expenses', 'Savings', 'Food', 'Transport', 'Bills'] as const;
 
 export default function HistoryScreen() {
   const router = useRouter();
@@ -66,6 +67,7 @@ export default function HistoryScreen() {
 
       setItems(prev => prev.filter(it => it.id !== id));
       setSelectedItem(null);
+      FinancialSync.notify();
     } catch (e: any) {
       console.warn('Error deleting transaction:', e.message);
       setDeleteError(e.message || 'Failed to delete transaction.');
@@ -137,6 +139,16 @@ export default function HistoryScreen() {
       }
     }, [user, authLoading, fetchHistory])
   );
+
+  // Subscribe to cross-screen financial events (e.g. Add Transaction, Savings Deposit)
+  useEffect(() => {
+    const unsubscribe = FinancialSync.subscribe(() => {
+      if (user) {
+        fetchHistory(true);
+      }
+    });
+    return unsubscribe;
+  }, [user, fetchHistory]);
 
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -257,12 +269,22 @@ export default function HistoryScreen() {
           <View style={styles.horizonRow}>
             <View style={styles.horizonBadge}>
               <Text style={styles.calIcon}>📅</Text>
-              <Text style={styles.horizonText}>This Month ({new Date().toLocaleString('en-NG', { month: 'long', year: 'numeric' })})</Text>
+              <Text style={styles.horizonText}>
+                {selectedFilter === 'All' && !searchQuery
+                  ? `Full Ledger (${new Date().toLocaleString('en-NG', { month: 'long', year: 'numeric' })})`
+                  : `Filtered (${selectedFilter})`}
+              </Text>
             </View>
 
             <View style={styles.horizonTotalCol}>
-              <Text style={styles.decTotalLabel}>TOTAL RECORDS</Text>
-              <Text style={styles.decTotalVal}>{items.length} Logged</Text>
+              <Text style={styles.decTotalLabel}>
+                {filteredItems.length === items.length ? 'TOTAL RECORDS' : 'MATCHING RECORDS'}
+              </Text>
+              <Text style={styles.decTotalVal}>
+                {filteredItems.length === items.length
+                  ? `${items.length} Logged`
+                  : `${filteredItems.length} of ${items.length}`}
+              </Text>
             </View>
           </View>
 

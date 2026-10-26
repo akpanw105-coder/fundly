@@ -18,14 +18,16 @@ import { Category, SpendingChart } from '@/components/fundly/SpendingChart';
 import { Transaction, TransactionItem } from '@/components/fundly/TransactionItem';
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
-import { calculateFinancialSummary, formatNaira, DbTransaction } from '@/lib/finance';
+import { calculateFinancialSummary, formatNaira, getDateFilterRange, DbTransaction, FinancialSync } from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { session, user, isLoading: authLoading } = useAuth();
 
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month' | 'year'>('month');
+  const [allTransactions, setAllTransactions] = useState<DbTransaction[]>([]);
+  const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
   const [loadingData, setLoadingData] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -40,6 +42,55 @@ export default function HomeScreen() {
       router.replace('/auth');
     }
   }, [session, authLoading, router]);
+
+  // Recalculate period-specific metrics and category breakdown whenever transactions or selectedPeriod change
+  const updateMetricsForPeriod = useCallback(
+    (txList: DbTransaction[], period: 'week' | 'month' | 'year') => {
+      // 1. Lifetime balance calculation: Total openingBalance + all income - all expenses
+      const lifetimeSummary = calculateFinancialSummary(txList);
+      setBalance(formatNaira(lifetimeSummary.balance));
+
+      // 2. Period-specific income, expenses, and category totals using standard date range
+      const { startDate, endDate } = getDateFilterRange(period);
+      const periodFilteredTxs = txList.filter(t => {
+        if (!t.date) return false;
+        if (startDate && t.date < startDate) return false;
+        if (endDate && t.date > endDate) return false;
+        return true;
+      });
+
+      const periodSummary = calculateFinancialSummary(periodFilteredTxs);
+      setIncomeTotal(formatNaira(periodSummary.totalIncome));
+      setExpenseTotal(formatNaira(periodSummary.totalExpenses));
+
+      // 3. Build spending categories for the selected period
+      if (periodSummary.totalExpenses > 0) {
+        const colorList = [
+          FundlyColors.categoryFood,
+          FundlyColors.categoryTransport,
+          FundlyColors.categoryUtilities,
+          FundlyColors.categorySubscriptions,
+          '#c084fc',
+          '#38bdf8',
+          '#facc15',
+        ];
+        const cats: Category[] = Object.keys(periodSummary.expenseCategoryTotals).map((catName, i) => {
+          const catAmt = periodSummary.expenseCategoryTotals[catName];
+          const pct = Math.round((catAmt / periodSummary.totalExpenses) * 1000) / 10;
+          return {
+            label: catName,
+            percentage: pct,
+            amount: '₦' + (catAmt / 1000).toFixed(0) + 'k',
+            color: colorList[i % colorList.length],
+          };
+        });
+        setSpendingCategories(cats);
+      } else {
+        setSpendingCategories([]);
+      }
+    },
+    []
+  );
 
   // Load transactions and calculate metrics
   const loadFinancialData = useCallback(async (isRefresh = false) => {
@@ -62,7 +113,7 @@ export default function HomeScreen() {
       if (error) throw error;
 
       const rawList: DbTransaction[] = data || [];
-      const summary = calculateFinancialSummary(rawList);
+      setAllTransactions(rawList);
 
       const mapped: Transaction[] = rawList.map(t => {
         const num = Number(t.amount) || 0;
@@ -84,36 +135,8 @@ export default function HomeScreen() {
         };
       });
 
-      setTransactions(mapped);
-      setIncomeTotal(formatNaira(summary.totalIncome));
-      setExpenseTotal(formatNaira(summary.totalExpenses));
-      setBalance(formatNaira(summary.balance));
-
-      // Build spending categories from real data
-      if (summary.totalExpenses > 0) {
-        const colorList = [
-          FundlyColors.categoryFood,
-          FundlyColors.categoryTransport,
-          FundlyColors.categoryUtilities,
-          FundlyColors.categorySubscriptions,
-          '#c084fc',
-          '#38bdf8',
-          '#facc15',
-        ];
-        const cats: Category[] = Object.keys(summary.expenseCategoryTotals).map((catName, i) => {
-          const catAmt = summary.expenseCategoryTotals[catName];
-          const pct = Math.round((catAmt / summary.totalExpenses) * 1000) / 10;
-          return {
-            label: catName,
-            percentage: pct,
-            amount: '₦' + (catAmt / 1000).toFixed(0) + 'k',
-            color: colorList[i % colorList.length],
-          };
-        });
-        setSpendingCategories(cats);
-      } else {
-        setSpendingCategories([]);
-      }
+      setRecentTransactions(mapped);
+      updateMetricsForPeriod(rawList, selectedPeriod);
     } catch (e: any) {
       console.warn('Error loading financial data:', e);
       setErrorMsg('Unable to load your data. Tap to retry.');
@@ -121,7 +144,13 @@ export default function HomeScreen() {
       setLoadingData(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [user, selectedPeriod, updateMetricsForPeriod]);
+
+  // Handle user toggling PeriodFilter
+  const handlePeriodChange = (period: 'week' | 'month' | 'year') => {
+    setSelectedPeriod(period);
+    updateMetricsForPeriod(allTransactions, period);
+  };
 
   // Auto-refresh financial data whenever Home screen comes into focus
   useFocusEffect(
@@ -134,6 +163,16 @@ export default function HomeScreen() {
       }
     }, [user, authLoading, loadFinancialData])
   );
+
+  // Subscribe to cross-screen financial events (e.g. History deletion, Goal deposit)
+  useEffect(() => {
+    const unsubscribe = FinancialSync.subscribe(() => {
+      if (user) {
+        loadFinancialData(true);
+      }
+    });
+    return unsubscribe;
+  }, [user, loadFinancialData]);
 
   const greeting = () => {
     const h = new Date().getHours();
@@ -219,7 +258,7 @@ export default function HomeScreen() {
         />
 
         {/* Period Filter */}
-        <PeriodFilter onChange={(_) => {}} />
+        <PeriodFilter value={selectedPeriod} onChange={handlePeriodChange} />
 
         {/* Spending By Category Chart - only shown when data exists */}
         {spendingCategories.length > 0 && (
@@ -249,8 +288,8 @@ export default function HomeScreen() {
           <View style={styles.transactionsList}>
             {loadingData ? (
               <ActivityIndicator color={FundlyColors.primary} style={{ marginVertical: 20 }} />
-            ) : transactions.length > 0 ? (
-              transactions.slice(0, 5).map(item => (
+            ) : recentTransactions.length > 0 ? (
+              recentTransactions.slice(0, 5).map(item => (
                 <TransactionItem key={item.id} item={item} />
               ))
             ) : (

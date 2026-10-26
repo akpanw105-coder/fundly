@@ -10,29 +10,22 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 import { PeriodFilter } from '@/components/fundly/PeriodFilter';
 import { SpendingChart, Category } from '@/components/fundly/SpendingChart';
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
-import { calculateFinancialSummary, getDateFilterRange, DbTransaction } from '@/lib/finance';
+import {
+  calculateFinancialSummary,
+  calculateHistoricalMonthlyTrends,
+  getDateFilterRange,
+  formatNaira,
+  MonthlyTrend,
+  DbTransaction,
+  FinancialSync,
+} from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
-
-interface MonthlyTrend {
-  month: string;
-  income: number;
-  expenses: number;
-  savings: number;
-}
-
-const DEFAULT_MONTHLY_TRENDS: MonthlyTrend[] = [
-  { month: 'Aug', income: 1800000, expenses: 950000, savings: 850000 },
-  { month: 'Sep', income: 2100000, expenses: 1100000, savings: 1000000 },
-  { month: 'Oct', income: 2000000, expenses: 880000, savings: 1120000 },
-  { month: 'Nov', income: 2300000, expenses: 1050000, savings: 1250000 },
-  { month: 'Dec', income: 2400000, expenses: 845300, savings: 1554700 },
-];
 
 export default function AnalyticsScreen() {
   const router = useRouter();
@@ -40,15 +33,19 @@ export default function AnalyticsScreen() {
 
   const [selectedPeriod, setSelectedPeriod] = useState<'week' | 'month' | 'year'>('month');
   const [activeTrendIdx, setActiveTrendIdx] = useState<number>(4);
-  const [trends, setTrends] = useState<MonthlyTrend[]>(DEFAULT_MONTHLY_TRENDS);
+  const [trends, setTrends] = useState<MonthlyTrend[]>(() => calculateHistoricalMonthlyTrends([]));
   const [categories, setCategories] = useState<Category[]>([]);
-  const [totalIncome, setTotalIncome] = useState<number>(0);
-  const [totalExpenses, setTotalExpenses] = useState<number>(0);
+  const [periodSummary, setPeriodSummary] = useState({
+    totalIncome: 0,
+    totalExpenses: 0,
+    netCashFlow: 0,
+    savingsRate: 0,
+  });
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const fetchAnalytics = useCallback(async (isRefresh = false) => {
+  const fetchAnalytics = useCallback(async (isRefresh = false, periodOverride?: 'week' | 'month' | 'year') => {
     if (!user) return;
     if (isRefresh) {
       setRefreshing(true);
@@ -57,28 +54,55 @@ export default function AnalyticsScreen() {
     }
     setErrorMsg('');
 
-    try {
-      const { startDate } = getDateFilterRange(selectedPeriod);
+    const activePeriod = periodOverride ?? selectedPeriod;
 
-      let query = supabase
+    try {
+      // 1. Fetch user's historical transactions for the last 5 calendar months to construct trends
+      const now = new Date();
+      const fiveMonthsAgoDate = new Date(now.getFullYear(), now.getMonth() - 4, 1);
+      const fiveMonthsAgoStr = fiveMonthsAgoDate.toISOString().split('T')[0];
+
+      const { data: allHistoryData, error: historyErr } = await supabase
+        .from('transactions')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('date', fiveMonthsAgoStr);
+
+      if (historyErr) throw historyErr;
+
+      const historyTxList: DbTransaction[] = allHistoryData || [];
+      const computedTrends = calculateHistoricalMonthlyTrends(historyTxList, 5, now);
+      setTrends(computedTrends);
+
+      // 2. Fetch transactions for the user's selected period (week, month, or year)
+      const { startDate, endDate } = getDateFilterRange(activePeriod, now);
+
+      let periodQuery = supabase
         .from('transactions')
         .select('*')
         .eq('user_id', user.id);
 
       if (startDate) {
-        query = query.gte('date', startDate);
+        periodQuery = periodQuery.gte('date', startDate);
+      }
+      if (endDate) {
+        periodQuery = periodQuery.lte('date', endDate);
       }
 
-      const { data, error } = await query;
+      const { data: periodData, error: periodErr } = await periodQuery;
+      if (periodErr) throw periodErr;
 
-      if (error) throw error;
+      const periodTxList: DbTransaction[] = periodData || [];
+      const summary = calculateFinancialSummary(periodTxList);
 
-      const rawList: DbTransaction[] = data || [];
-      const summary = calculateFinancialSummary(rawList);
+      setPeriodSummary({
+        totalIncome: summary.totalIncome,
+        totalExpenses: summary.totalExpenses,
+        netCashFlow: summary.netCashFlow,
+        savingsRate: summary.savingsRate,
+      });
 
-      setTotalIncome(summary.totalIncome);
-      setTotalExpenses(summary.totalExpenses);
-
+      // 3. Category Breakdown for the selected period
       if (summary.totalExpenses > 0) {
         const colorList = [
           FundlyColors.categoryFood,
@@ -105,22 +129,6 @@ export default function AnalyticsScreen() {
       } else {
         setCategories([]);
       }
-
-      // Update current month trend with actual user numbers
-      const now = new Date();
-      if (summary.totalIncome > 0 || summary.totalExpenses > 0) {
-        setTrends(prev => {
-          const updated = [...prev];
-          const currentMonthName = now.toLocaleString('en-US', { month: 'short' });
-          updated[4] = {
-            month: currentMonthName,
-            income: summary.totalIncome,
-            expenses: summary.totalExpenses,
-            savings: summary.netCashFlow,
-          };
-          return updated;
-        });
-      }
     } catch (e: any) {
       console.warn('Error fetching analytics:', e);
       setErrorMsg('Could not load analytics. Tap to retry.');
@@ -130,16 +138,42 @@ export default function AnalyticsScreen() {
     }
   }, [user, selectedPeriod]);
 
-  useEffect(() => {
-    if (user) {
-      fetchAnalytics();
-    } else if (!authLoading) {
-      setLoading(false);
-    }
-  }, [user, authLoading, fetchAnalytics]);
+  // Auto-refresh when Analytics screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        fetchAnalytics();
+      } else if (!authLoading) {
+        setLoading(false);
+      }
+    }, [user, authLoading, fetchAnalytics])
+  );
 
-  const activeTrend = trends[activeTrendIdx] || DEFAULT_MONTHLY_TRENDS[4];
-  const maxBarValue = Math.max(...trends.map(t => Math.max(t.income, t.expenses, 2000000)));
+  // Subscribe to cross-screen financial events (e.g. Add Transaction, History delete, Goal deposit)
+  useEffect(() => {
+    const unsubscribe = FinancialSync.subscribe(() => {
+      if (user) {
+        fetchAnalytics(true);
+      }
+    });
+    return unsubscribe;
+  }, [user, fetchAnalytics]);
+
+  const activeTrend = trends[activeTrendIdx] || trends[trends.length - 1] || {
+    month: 'Now',
+    fullMonthYear: 'Current Month',
+    year: new Date().getFullYear(),
+    monthIndex: new Date().getMonth(),
+    income: 0,
+    expenses: 0,
+    savings: 0,
+  };
+
+  // Find max value across all months for proportional bar scaling
+  const maxBarValue = Math.max(
+    ...trends.map(t => Math.max(t.income, t.expenses)),
+    100000 // reasonable baseline to prevent division by zero or huge bars for tiny amounts
+  );
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -179,7 +213,14 @@ export default function AnalyticsScreen() {
           />
         }>
         {/* Period Filter */}
-        <PeriodFilter onChange={setSelectedPeriod} />
+        <PeriodFilter
+          value={selectedPeriod}
+          onChange={(period) => {
+            setSelectedPeriod(period);
+            // Re-fetch immediately with the new period before React state settles
+            fetchAnalytics(false, period);
+          }}
+        />
 
         {/* Error state with retry */}
         {errorMsg ? (
@@ -196,19 +237,24 @@ export default function AnalyticsScreen() {
         <View style={styles.heroCard}>
           <View style={styles.heroHeader}>
             <Text style={styles.heroSub}>
-              NET CASH FLOW ({activeTrend.month.toUpperCase()} {new Date().getFullYear()})
+              NET CASH FLOW ({activeTrend.fullMonthYear.toUpperCase()})
             </Text>
-            {totalIncome > 0 && totalExpenses > 0 && (
+            {activeTrend.income > 0 && (
               <View style={styles.rateBadge}>
                 <Text style={styles.rateText}>
-                  {Math.round(((totalIncome - totalExpenses) / totalIncome) * 100)}% savings
+                  {Math.max(0, Math.round((activeTrend.savings / activeTrend.income) * 100))}% savings
                 </Text>
               </View>
             )}
           </View>
 
-          <Text style={styles.heroAmount}>
-            +₦{(activeTrend.income - activeTrend.expenses).toLocaleString('en-NG', {
+          <Text
+            style={[
+              styles.heroAmount,
+              activeTrend.savings < 0 && { color: FundlyColors.error },
+            ]}>
+            {activeTrend.savings >= 0 ? '+' : '-'}₦
+            {Math.abs(activeTrend.savings).toLocaleString('en-NG', {
               minimumFractionDigits: 2,
             })}
           </Text>
@@ -219,7 +265,7 @@ export default function AnalyticsScreen() {
               <View>
                 <Text style={styles.heroMetricLabel}>Total Inflow</Text>
                 <Text style={[styles.heroMetricVal, { color: FundlyColors.secondary }]}>
-                  ₦{activeTrend.income.toLocaleString('en-NG')}
+                  ₦{activeTrend.income.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
                 </Text>
               </View>
             </View>
@@ -229,7 +275,7 @@ export default function AnalyticsScreen() {
               <View>
                 <Text style={styles.heroMetricLabel}>Total Outflow</Text>
                 <Text style={[styles.heroMetricVal, { color: FundlyColors.error }]}>
-                  ₦{activeTrend.expenses.toLocaleString('en-NG')}
+                  ₦{activeTrend.expenses.toLocaleString('en-NG', { minimumFractionDigits: 2 })}
                 </Text>
               </View>
             </View>
@@ -246,21 +292,24 @@ export default function AnalyticsScreen() {
           <View style={styles.barsContainer}>
             {trends.map((trend, idx) => {
               const isSelected = idx === activeTrendIdx;
-              const incomeHeight = (trend.income / maxBarValue) * 120;
-              const expenseHeight = (trend.expenses / maxBarValue) * 120;
+              const incomeHeight = maxBarValue > 0 ? (trend.income / maxBarValue) * 120 : 0;
+              const expenseHeight = maxBarValue > 0 ? (trend.expenses / maxBarValue) * 120 : 0;
               const netTrend = trend.income - trend.expenses;
 
               return (
                 <Pressable
-                  key={trend.month}
+                  key={`${trend.year}-${trend.monthIndex}`}
                   style={styles.barColumn}
                   onPress={() => setActiveTrendIdx(idx)}>
                   {isSelected && (
                     <View style={styles.activeFloatChip}>
                       <Text style={styles.activeFloatText}>
-                        ₦{netTrend >= 1000000
-                          ? `${(netTrend / 1000000).toFixed(2)}M`
-                          : `${(netTrend / 1000).toFixed(0)}k`}
+                        {netTrend >= 0 ? '+' : '-'}₦
+                        {Math.abs(netTrend) >= 1000000
+                          ? `${(Math.abs(netTrend) / 1000000).toFixed(2)}M`
+                          : Math.abs(netTrend) >= 1000
+                          ? `${(Math.abs(netTrend) / 1000).toFixed(0)}k`
+                          : Math.abs(netTrend).toLocaleString('en-NG')}
                       </Text>
                     </View>
                   )}
@@ -269,14 +318,14 @@ export default function AnalyticsScreen() {
                     <View
                       style={[
                         styles.barTrack,
-                        { height: incomeHeight },
+                        { height: Math.max(4, incomeHeight) },
                         isSelected ? styles.barActiveIncome : styles.barInactiveIncome,
                       ]}
                     />
                     <View
                       style={[
                         styles.barTrack,
-                        { height: expenseHeight },
+                        { height: Math.max(4, expenseHeight) },
                         isSelected ? styles.barActiveExpense : styles.barInactiveExpense,
                       ]}
                     />
@@ -297,11 +346,11 @@ export default function AnalyticsScreen() {
           <View style={styles.chartLegend}>
             <View style={styles.legendItem}>
               <View style={[styles.legendSquare, { backgroundColor: FundlyColors.secondary }]} />
-              <Text style={styles.legendText}>Inflow (Salary & Returns)</Text>
+              <Text style={styles.legendText}>Inflow (Income)</Text>
             </View>
             <View style={styles.legendItem}>
               <View style={[styles.legendSquare, { backgroundColor: FundlyColors.primaryContainer }]} />
-              <Text style={styles.legendText}>Outflow (Expenses)</Text>
+              <Text style={styles.legendText}>Outflow (Expenses & Savings)</Text>
             </View>
           </View>
         </View>
@@ -311,7 +360,7 @@ export default function AnalyticsScreen() {
           <ActivityIndicator color={FundlyColors.primary} style={{ marginVertical: 20 }} />
         ) : (
           <SpendingChart
-            total={`₦${totalExpenses.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`}
+            total={`₦${periodSummary.totalExpenses.toLocaleString('en-NG', { minimumFractionDigits: 2 })}`}
             categories={categories}
           />
         )}

@@ -11,11 +11,11 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
-import { calculateFinancialSummary, getDateFilterRange, getCategorySpending, DbTransaction } from '@/lib/finance';
+import { calculateFinancialSummary, getDateFilterRange, getCategorySpending, DbTransaction, FinancialSync } from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
 
 interface BudgetItem {
@@ -42,6 +42,8 @@ export default function BudgetsScreen() {
   const [formError, setFormError] = useState('');
 
   const currentMonthYear = new Date().toISOString().slice(0, 7);
+
+  const seedingRef = React.useRef(false);
 
   const fetchBudgetsAndExpenses = useCallback(async (isRefresh = false) => {
     if (!user) return;
@@ -87,37 +89,76 @@ export default function BudgetsScreen() {
           iconBg: b.icon_bg || 'rgba(37, 99, 235, 0.20)',
         }));
         setBudgets(mapped);
-      } else {
-        // Create initial default envelopes for user if none exist
+      } else if (!seedingRef.current) {
+        // Guard against duplicate concurrent seeding
+        seedingRef.current = true;
+
+        // Create initial default envelopes for user using a single batch insert with .select()
+        // so that real Supabase Postgres UUIDs are returned and stored in local state
         const initialEnvelopes = [
-          { category: 'Food', allocated: 400000, icon: '🍽️', color: FundlyColors.categoryFood },
-          { category: 'Transport', allocated: 200000, icon: '🚗', color: FundlyColors.categoryTransport },
-          { category: 'Bills', allocated: 150000, icon: '⚡', color: FundlyColors.categoryUtilities },
-          { category: 'Shopping', allocated: 100000, icon: '🛍️', color: FundlyColors.primaryFixed },
+          {
+            user_id: user.id,
+            category: 'Food',
+            allocated: 400000,
+            month_year: currentMonthYear,
+            icon: '🍽️',
+            color: FundlyColors.categoryFood,
+            icon_bg: 'rgba(37, 99, 235, 0.20)',
+          },
+          {
+            user_id: user.id,
+            category: 'Transport',
+            allocated: 200000,
+            month_year: currentMonthYear,
+            icon: '🚗',
+            color: FundlyColors.categoryTransport,
+            icon_bg: 'rgba(37, 99, 235, 0.20)',
+          },
+          {
+            user_id: user.id,
+            category: 'Bills',
+            allocated: 150000,
+            month_year: currentMonthYear,
+            icon: '⚡',
+            color: FundlyColors.categoryUtilities,
+            icon_bg: 'rgba(37, 99, 235, 0.20)',
+          },
+          {
+            user_id: user.id,
+            category: 'Shopping',
+            allocated: 100000,
+            month_year: currentMonthYear,
+            icon: '🛍️',
+            color: FundlyColors.primaryFixed,
+            icon_bg: 'rgba(37, 99, 235, 0.20)',
+          },
         ];
 
-        for (const env of initialEnvelopes) {
-          await supabase.from('budgets').insert({
-            user_id: user.id,
-            category: env.category,
-            allocated: env.allocated,
-            month_year: currentMonthYear,
-            icon: env.icon,
-            color: env.color,
-            icon_bg: 'rgba(37, 99, 235, 0.20)',
-          });
-        }
+        const { data: insertedData, error: insertErr } = await supabase
+          .from('budgets')
+          .insert(initialEnvelopes)
+          .select('*');
 
-        const reMapped: BudgetItem[] = initialEnvelopes.map((e, idx) => ({
-          id: idx.toString(),
-          category: e.category,
-          allocated: e.allocated,
-          spent: getCategorySpending(summary.expenseCategoryTotals, e.category),
-          icon: e.icon,
-          color: e.color,
-          iconBg: 'rgba(37, 99, 235, 0.20)',
-        }));
-        setBudgets(reMapped);
+        seedingRef.current = false;
+
+        if (insertErr) {
+          console.warn('Error auto-seeding initial envelopes:', insertErr.message);
+          // Set empty state so user sees empty prompt instead of fake unsaved records
+          setBudgets([]);
+        } else if (insertedData && insertedData.length > 0) {
+          const reMapped: BudgetItem[] = insertedData.map((b: any) => ({
+            id: b.id, // Real database UUID from Supabase
+            category: b.category,
+            allocated: Number(b.allocated),
+            spent: getCategorySpending(summary.expenseCategoryTotals, b.category),
+            icon: b.icon || '🥧',
+            color: b.color || FundlyColors.primary,
+            iconBg: b.icon_bg || 'rgba(37, 99, 235, 0.20)',
+          }));
+          setBudgets(reMapped);
+        } else {
+          setBudgets([]);
+        }
       }
     } catch (e: any) {
       console.warn('Error fetching budgets:', e);
@@ -128,13 +169,26 @@ export default function BudgetsScreen() {
     }
   }, [user, currentMonthYear]);
 
+  // Auto-refresh when Budgets screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      if (user) {
+        fetchBudgetsAndExpenses();
+      } else if (!authLoading) {
+        setLoading(false);
+      }
+    }, [user, authLoading, fetchBudgetsAndExpenses])
+  );
+
+  // Refresh spending against envelopes when new transactions or goal contributions occur
   useEffect(() => {
-    if (user) {
-      fetchBudgetsAndExpenses();
-    } else if (!authLoading) {
-      setLoading(false);
-    }
-  }, [user, authLoading, fetchBudgetsAndExpenses]);
+    const unsubscribe = FinancialSync.subscribe(() => {
+      if (user) {
+        fetchBudgetsAndExpenses(true);
+      }
+    });
+    return unsubscribe;
+  }, [user, fetchBudgetsAndExpenses]);
 
   const totalSpent = budgets.reduce((acc, b) => acc + b.spent, 0);
   const totalAllocated = budgets.reduce((acc, b) => acc + b.allocated, 0);
@@ -193,6 +247,7 @@ export default function BudgetsScreen() {
 
       setBudgets(prev => prev.filter(b => b.id !== id));
       setSelectedBudget(null);
+      FinancialSync.notify();
     } catch (e: any) {
       console.warn('Error deleting budget:', e.message);
       setBudgetActionError(e.message || 'Failed to delete budget.');
@@ -229,6 +284,7 @@ export default function BudgetsScreen() {
       setNewLimit('');
       setIsAddingBudget(false);
       fetchBudgetsAndExpenses();
+      FinancialSync.notify();
     } catch (e: any) {
       console.warn('Error adding budget:', e.message);
       setFormError('Something went wrong. Please try again.');

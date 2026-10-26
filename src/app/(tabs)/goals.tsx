@@ -15,6 +15,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 
 import { BottomTabInset, FundlyColors, FundlyTypography, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/context/auth';
+import { FinancialSync } from '@/lib/finance';
 import { supabase } from '@/lib/supabase';
 
 interface SavingsGoal {
@@ -89,6 +90,16 @@ export default function GoalsScreen() {
     }, [user, authLoading, fetchGoals])
   );
 
+  // Subscribe to cross-screen financial events
+  useEffect(() => {
+    const unsubscribe = FinancialSync.subscribe(() => {
+      if (user) {
+        fetchGoals(true);
+      }
+    });
+    return unsubscribe;
+  }, [user, fetchGoals]);
+
   // Expose a refresh that home can call after adding a transaction
   const onRefresh = () => fetchGoals(true);
 
@@ -128,6 +139,7 @@ export default function GoalsScreen() {
       setNewDeadline('Dec 2025');
       setIsAdding(false);
       fetchGoals();
+      FinancialSync.notify();
     } catch (e: any) {
       console.warn('Error adding goal:', e.message);
       setFormError('Something went wrong. Please try again.');
@@ -142,9 +154,12 @@ export default function GoalsScreen() {
   const [depositing, setDepositing] = useState(false);
 
   const handleDeposit = async (id: string, amount: number) => {
-    if (!user || amount <= 0) return;
+    if (!user || amount <= 0 || depositing) return;
     const goal = goals.find(g => g.id === id);
     if (!goal) return;
+
+    setDepositing(true);
+    setDepositError('');
 
     const originalSaved = goal.saved;
     const newSaved = Math.min(goal.target, goal.saved + amount);
@@ -152,17 +167,80 @@ export default function GoalsScreen() {
     // Optimistic UI update
     setGoals(prev => prev.map(g => (g.id === id ? { ...g, saved: newSaved } : g)));
 
-    try {
-      // 1. Record contribution record in savings_contributions
-      const { error: contribErr } = await supabase.from('savings_contributions').insert({
-        goal_id: id,
-        user_id: user.id,
-        amount: amount,
-        note: `Contribution of ₦${amount.toLocaleString('en-NG')}`,
-      });
-      if (contribErr) throw contribErr;
+    let createdContribId: string | null = null;
+    let createdTxId: string | null = null;
 
-      // 2. Update goal current_saved
+    try {
+      // Check current user balance to prevent overdrafting beyond lifetime balance
+      const { data: balanceData, error: balanceErr } = await supabase
+        .from('transactions')
+        .select('amount, is_income')
+        .eq('user_id', user.id);
+
+      if (balanceErr) throw balanceErr;
+
+      if (balanceData) {
+        let currentBalance = 0;
+        for (const t of balanceData) {
+          const val = Number(t.amount) || 0;
+          currentBalance += t.is_income ? val : -val;
+        }
+
+        if (currentBalance < amount) {
+          throw new Error(
+            `Insufficient funds. Available balance is ₦${currentBalance.toLocaleString('en-NG', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}, but deposit requires ₦${amount.toLocaleString('en-NG', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}.`
+          );
+        }
+      }
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+      // 1. Record contribution record in savings_contributions
+      const { data: contribData, error: contribErr } = await supabase
+        .from('savings_contributions')
+        .insert({
+          goal_id: id,
+          user_id: user.id,
+          amount: amount,
+          note: `Contribution to ${goal.title}`,
+        })
+        .select()
+        .single();
+      if (contribErr) throw contribErr;
+      if (contribData) createdContribId = contribData.id;
+
+      // 2. Record savings transfer/outflow transaction in transactions ledger
+      // This seamlessly deducts the amount from available balance and records it in History
+      const { data: txData, error: txErr } = await supabase
+        .from('transactions')
+        .insert({
+          user_id: user.id,
+          name: `Savings: ${goal.title}`,
+          category: 'Savings',
+          category_display: 'Savings Goal',
+          amount: amount,
+          is_income: false,
+          payment_method: 'Bank',
+          note: `Deposit toward "${goal.title}" milestone`,
+          emoji: goal.icon || '🎯',
+          icon_bg: 'rgba(37, 99, 235, 0.20)',
+          icon_color: goal.accentColor || FundlyColors.primary,
+          date: todayStr,
+          time_display: timeStr,
+        })
+        .select()
+        .single();
+      if (txErr) throw txErr;
+      if (txData) createdTxId = txData.id;
+
+      // 3. Update goal current_saved
       const { error: updateErr } = await supabase
         .from('savings_goals')
         .update({ current_saved: newSaved, is_completed: newSaved >= goal.target })
@@ -172,8 +250,18 @@ export default function GoalsScreen() {
       setDepositGoalId(null);
       setDepositAmount('');
       setDepositError('');
+      FinancialSync.notify();
     } catch (e: any) {
       console.warn('Error recording deposit:', e.message);
+
+      // Clean up any partially created records if subsequent step failed
+      if (createdContribId) {
+        await supabase.from('savings_contributions').delete().eq('id', createdContribId);
+      }
+      if (createdTxId) {
+        await supabase.from('transactions').delete().eq('id', createdTxId);
+      }
+
       // Rollback optimistic update
       setGoals(prev => prev.map(g => (g.id === id ? { ...g, saved: originalSaved } : g)));
       setDepositError(e.message || 'Deposit failed. Please try again.');
@@ -193,6 +281,7 @@ export default function GoalsScreen() {
 
       if (error) throw error;
       setGoals(prev => prev.filter(g => g.id !== id));
+      FinancialSync.notify();
     } catch (e: any) {
       console.warn('Error deleting goal:', e.message);
     }
@@ -384,17 +473,20 @@ export default function GoalsScreen() {
 
                       <View style={styles.quickDepositRow}>
                         <Pressable
-                          style={styles.quickDepositBtn}
+                          style={[styles.quickDepositBtn, depositing && { opacity: 0.5 }]}
+                          disabled={depositing}
                           onPress={() => handleDeposit(goal.id, 100000)}>
                           <Text style={styles.quickDepositText}>+₦100k</Text>
                         </Pressable>
                         <Pressable
-                          style={styles.quickDepositBtn}
+                          style={[styles.quickDepositBtn, depositing && { opacity: 0.5 }]}
+                          disabled={depositing}
                           onPress={() => handleDeposit(goal.id, 500000)}>
                           <Text style={styles.quickDepositText}>+₦500k</Text>
                         </Pressable>
                         <Pressable
-                          style={[styles.quickDepositBtn, styles.customDepositBtn]}
+                          style={[styles.quickDepositBtn, styles.customDepositBtn, depositing && { opacity: 0.5 }]}
+                          disabled={depositing}
                           onPress={() => {
                             setDepositGoalId(goal.id);
                             setDepositAmount('');
