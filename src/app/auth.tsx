@@ -125,6 +125,7 @@ export default function AuthScreen() {
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
+          style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}>
           {/* Brand Header */}
@@ -342,8 +343,14 @@ const styles = StyleSheet.create({
   },
   keyboardView: {
     flex: 1,
+    backgroundColor: FundlyColors.background,
+  },
+  scrollView: {
+    flex: 1,
+    backgroundColor: FundlyColors.background,
   },
   scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.six,
     paddingBottom: Spacing.seven,
@@ -351,6 +358,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     width: '100%',
     gap: Spacing.four,
+    backgroundColor: FundlyColors.background,
   },
   brandContainer: {
     alignItems: 'center',
